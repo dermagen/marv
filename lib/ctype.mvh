@@ -1,0 +1,20 @@
+;;; ctype.mvh — MARV character classification & case conversion interface
+;;; Matches WCPL `ctype.wo` and native `lib/ctype.c` (MARV internal ABI).
+
+(interface $ctype
+  (func $isalnum  (param $c i32) (result i32))
+  (func $isalpha  (param $c i32) (result i32))
+  (func $iscntrl  (param $c i32) (result i32))
+  (func $isdigit  (param $c i32) (result i32))
+  (func $isgraph  (param $c i32) (result i32))
+  (func $islower  (param $c i32) (result i32))
+  (func $isprint  (param $c i32) (result i32))
+  (func $ispunct  (param $c i32) (result i32))
+  (func $isspace  (param $c i32) (result i32))
+  (func $isupper  (param $c i32) (result i32))
+  (func $isxdigit (param $c i32) (result i32))
+  (func $isascii  (param $c i32) (result i32))
+  (func $isblank  (param $c i32) (result i32))
+  (func $toupper  (param $c i32) (result i32))
+  (func $tolower  (param $c i32) (result i32))
+)

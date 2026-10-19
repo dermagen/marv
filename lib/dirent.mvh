@@ -1,0 +1,48 @@
+;;; dirent.mvh — MARV directory traversal interface
+;;; Constants and `dirent` record layout taken directly from WCPL `dirent.h`
+;;; (`DT_DIR=3`, `DT_REG=4`, `d_ino@0`, `d_type@8`, `d_name@9`).
+
+(mvh-include system $errno)
+(mvh-include system $stdlib)
+(mvh-include system $string)
+(mvh-include system $fcntl)
+(mvh-include system $unistd)
+
+(interface $dirent
+  ;; File-type constants (WCPL / WASI FILETYPE_* values)
+  (const $DT_UNKNOWN i32 0)
+  (const $DT_BLK     i32 1)
+  (const $DT_CHR     i32 2)
+  (const $DT_DIR     i32 3)
+  (const $DT_REG     i32 4)
+  (const $DT_FIFO    i32 6)
+  (const $DT_LNK     i32 7)
+
+  ;; WCPL / MARV struct dirent layout:
+  ;;   offset 0: d_ino  (i64, 8 bytes)
+  ;;   offset 8: d_type (u8,  1 byte)
+  ;;   offset 9: d_name (inline NUL-terminated UTF-8 string)
+  (record $dirent
+    (field $d_ino  i64)
+    (field $d_type u8)
+    (field $d_name (array u8 256)))
+
+  (func $fdopendir  (param $fd i32) (result ptr))
+  (func $fdclosedir (param $dirp ptr) (result i32))
+  (func $opendirat  (param $dirfd i32) (param $dirname ptr) (result ptr))
+  (func $opendir    (param $dirname ptr) (result ptr))
+  (func $dirfd      (param $dirp ptr) (result i32))
+  (func $closedir   (param $dirp ptr) (result i32))
+  (func $readdir    (param $dirp ptr) (result ptr))
+  (func $rewinddir  (param $dirp ptr))
+  (func $seekdir    (param $dirp ptr) (param $loc i64))
+  (func $telldir    (param $dirp ptr) (result i64))
+  (func $scandirat  (param $dirfd i32) (param $dir ptr) (param $namelist ptr) (param $filter ptr) (param $compar ptr) (result i32))
+  (func $scandir    (param $dir ptr) (param $namelist ptr) (param $filter ptr) (param $compar ptr) (result i32))
+  (func $alphasort  (param $da ptr) (param $db ptr) (result i32))
+  (func $freelist   (param $namelist ptr) (param $count i32))
+  (func $d_ino      (param $ent ptr) (result i64))
+  (func $d_type     (param $ent ptr) (result i32))
+  (func $d_namlen   (param $ent ptr) (result i32))
+  (func $d_name     (param $ent ptr) (result ptr))
+)

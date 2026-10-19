@@ -1,0 +1,15 @@
+;; =============================================================================
+;; mstd/examples/multimod/app.mvh -- Interface for MARV Module 3 (`$app`)
+;; =============================================================================
+
+(interface $app
+  (const $NUM_SAMPLES i32 4)
+
+  ;; Callback passed by `ref.func` into `$stats:build_and_sort_samples`
+  (func $bonus_for_id (param $id i32) (param $base_len f64) (result f64))
+
+  ;; Run the multi-module verification suite (returns 4200 on success)
+  (func $run_multimod_suite (param $verbose i32) (result i32))
+
+  ;; Standard program entry point
+  (func $main (param $argc i32) (param $argv ptr) (result i32)))

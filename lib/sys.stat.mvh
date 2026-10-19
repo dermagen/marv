@@ -1,0 +1,69 @@
+;;; sys.stat.mvh — MARV file status & metadata interface
+;;; Header `sys.stat.mvh` corresponds to `lib/sys/stat.c` in the native C library
+;;; and module `"stat"` (`wcpl/lib/stat.wo`) on the `.wo` target.
+
+(mvh-include system $errno)
+(mvh-include system $fcntl)
+(mvh-include system $string)
+
+(interface $sys.stat
+  (module "stat")
+
+  ;; File mode constants from WCPL `sys.stat.h`
+  (const $S_IFBLK  i32 #x6000)
+  (const $S_IFCHR  i32 #x2000)
+  (const $S_IFDIR  i32 #x4000)
+  (const $S_IFLNK  i32 #xa000)
+  (const $S_IFREG  i32 #x8000)
+  (const $S_IFSOCK i32 #xc000)
+  (const $S_IFIFO  i32 #xc000)
+  (const $S_IFMT   i32 #xe000)
+
+  (const $S_IXOTH i32 #x001)
+  (const $S_IWOTH i32 #x002)
+  (const $S_IROTH i32 #x004)
+  (const $S_IRWXO i32 #x007)
+  (const $S_IXGRP i32 #x008)
+  (const $S_IWGRP i32 #x010)
+  (const $S_IRGRP i32 #x020)
+  (const $S_IRWXG i32 #x038)
+  (const $S_IXUSR i32 #x040)
+  (const $S_IWUSR i32 #x080)
+  (const $S_IRUSR i32 #x100)
+  (const $S_IRWXU i32 #x1c0)
+  (const $S_ISVTX i32 #x200)
+  (const $S_ISGID i32 #x400)
+  (const $S_ISUID i32 #x800)
+
+  ;; WCPL struct stat layout (80 bytes, 8-byte aligned):
+  ;;   0:  st_dev      (i64)
+  ;;   8:  st_ino      (i64)
+  ;;   16: st_nlink    (i64)
+  ;;   24: st_mode     (i32) [+ 4B pad]
+  ;;   32: st_size     (i64)
+  ;;   40: st_atime    (i64)
+  ;;   48: st_mtime    (i64)
+  ;;   56: st_ctime    (i64)
+  ;;   64: st_atime_ns (i32)
+  ;;   68: st_mtime_ns (i32)
+  ;;   72: st_ctime_ns (i32) [+ 4B pad]
+  (record $stat
+    (field $st_dev      i64)
+    (field $st_ino      i64)
+    (field $st_nlink    i64)
+    (field $st_mode     i32)
+    (field $st_size     i64)
+    (field $st_atime    i64)
+    (field $st_mtime    i64)
+    (field $st_ctime    i64)
+    (field $st_atime_ns i32)
+    (field $st_mtime_ns i32)
+    (field $st_ctime_ns i32))
+
+  (func $fstat   (param $fd i32) (param $ps ptr) (result i32))
+  (func $fstatat (param $fd i32) (param $path ptr) (param $ps ptr) (param $atflag i32) (result i32))
+  (func $stat    (param $path ptr) (param $ps ptr) (result i32))
+  (func $lstat   (param $path ptr) (param $ps ptr) (result i32))
+  (func $mkdirat (param $fd i32) (param $path ptr) (param $mode i32) (result i32))
+  (func $mkdir   (param $path ptr) (param $mode i32) (result i32))
+)

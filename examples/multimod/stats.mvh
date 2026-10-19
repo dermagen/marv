@@ -1,0 +1,36 @@
+;; =============================================================================
+;; mstd/examples/multimod/stats.mvh -- Interface for MARV Module 2 (`$stats`)
+;; Includes `$vec3` and defines `$sample` records, variadic `$weighted_sum_va`,
+;; comparator `$cmp_sample_score_asc`, and sample pipeline functions.
+;; =============================================================================
+
+(mvh-include $vec3)
+
+(interface $stats
+  (const $SAMPLE_TAG_BASE i32 100)
+
+  ;; 40-byte record embedding `$vec3` at offset 8
+  (record $sample
+    (field $id    i32)
+    (field $tag   i32)
+    (field $pos   (record $vec3))
+    (field $score f64))
+
+  ;; Exported mutable global and exported read-only label data
+  (global $sorted_runs (mut i32))
+  (data   $tag_label   const align=8 size=8)
+
+  ;; Variadic MARV function taking `$scale` and arbitrary `i32` varargs (`$ap$`)
+  (func $weighted_sum_va (param $scale i32) (param ...) (result i32))
+
+  ;; Exported comparator suitable for `$stdlib:qsort` and `$stdlib:bsearch`
+  (func $cmp_sample_score_asc (param $a ptr) (param $b ptr) (result i32))
+
+  ;; Populate `$n` samples in `$arr`, apply `$bonus_cb`, sort with `qsort`,
+  ;; and return total score sum
+  (func $build_and_sort_samples
+    (param $arr ptr) (param $n i32) (param $bonus_cb ptr) (result f64))
+
+  ;; Format a single `$sample` into `$buf` using `$stdio:snprintf`
+  (func $format_sample
+    (param $buf ptr) (param $cap i32) (param $s ptr) (result i32)))

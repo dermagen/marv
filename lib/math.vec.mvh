@@ -1,0 +1,20 @@
+;; math.vec.mvh - Example nested module interface (`math.vec.mvh` <-> `lib/math/vec.c`)
+(mvh-include system $math)
+
+(interface $math.vec
+  ;; Fixed 24-byte 3D vector record
+  (record $vec3
+    (field $x f64)
+    (field $y f64)
+    (field $z f64))
+
+  ;; Dot product: a.x*b.x + a.y*b.y + a.z*b.z
+  (func $dot (param $a ptr) (param $b ptr) (result f64))
+
+  ;; Cross product returned by value via WCPL/MARV `rp$` destination pointer convention:
+  ;; lowered signature is `(param $rp$ ptr) (param $a ptr) (param $b ptr)` -> void
+  (func $cross (result (record $vec3)) (param $a ptr) (param $b ptr))
+
+  ;; Euclidean norm: sqrt(dot(v, v))
+  (func $norm (param $v ptr) (result f64))
+)

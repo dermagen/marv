@@ -1,0 +1,120 @@
+;; =============================================================================
+;; mstd/examples/multimod/stats.mvs -- Implementation of MARV Module 2 (`$stats`)
+;; Includes its own `stats.mvh`, sibling `vec3.mvh`, and system `stdio`/`stdlib`.
+;; =============================================================================
+
+(mvh-include $stats)
+(mvh-include $vec3)
+(mvh-include system $stdio)
+(mvh-include system $stdlib)
+
+(module $stats
+
+  (global $sorted_runs (export "sorted_runs") (mut i32) (i32.const 0))
+
+  (data $tag_label (export "tag_label") const align=8 "SAMPLE\x00;\x00;")
+  (data $fmt_sample const align=8 "%s#%d(tag=%d,score=%.1f)\x00;")
+
+  ;; Variadic MARV function: returns `scale * sum(varargs)`
+  (func $weighted_sum_va (export "weighted_sum_va")
+    (param $scale i32) (param ...) (result i32)
+    (local $ap ptr) (local $cnt i32) (local $i i32) (local $acc i32)
+    (local.set $ap  (va.start))
+    (local.set $cnt (va.count))
+    (local.set $i   (i32.const 0))
+    (local.set $acc (i32.const 0))
+    (block $done
+      (loop $lp
+        (br_if $done (i32.ge_s $i $cnt))
+        (local.set $acc (i32.add $acc (va.arg $ap i32)))
+        (local.set $i   (i32.add $i (i32.const 1)))
+        (br $lp)))
+    (return (i32.mul $scale $acc)))
+
+  ;; Comparator for `$sample` records by ascending `$score`
+  (func $cmp_sample_score_asc (export "cmp_sample_score_asc")
+    (param $a ptr) (param $b ptr) (result i32)
+    (local $sa f64) (local $sb f64)
+    (local.set $sa (field.get $sample $score $a))
+    (local.set $sb (field.get $sample $score $b))
+    (if (f64.lt $sa $sb)
+      (then (return (i32.const -1)))
+      (else
+        (if (f64.gt $sa $sb)
+          (then (return (i32.const 1)))
+          (else (return (i32.const 0)))))))
+
+  ;; Populate `$n` samples in `$arr`, invoke `$bonus_cb`, sort via `qsort`,
+  ;; and return sum of all scores.
+  ;; Frame layout (64 bytes):
+  ;;   [0..23]  : temporary `$vec3` basis A
+  ;;   [24..47] : temporary `$vec3` basis B
+  (func $build_and_sort_samples (export "build_and_sort_samples")
+    (param $arr ptr) (param $n i32) (param $bonus_cb ptr) (result f64)
+    (frame 64)
+    (local $i i32) (local $elem ptr) (local $pos_ptr ptr)
+    (local $base_len f64) (local $sc f64) (local $total f64)
+
+    ;; Basis vector B = (0.0, 4.0, 0.0) at frame[24]
+    (call $make (frame.addr 24) (f64.const 0.0) (f64.const 4.0) (f64.const 0.0))
+
+    (local.set $i (i32.const 0))
+    (block $init_done
+      (loop $init_lp
+        (br_if $init_done (i32.ge_s $i $n))
+        (local.set $elem
+          (ptr.add $arr (i32.mul $i (sizeof $sample))))
+        (field.set $sample $id  $elem $i)
+        (field.set $sample $tag $elem (i32.add (const $SAMPLE_TAG_BASE) $i))
+
+        ;; Basis vector A = (3.0, 0.0, (n - i) * VEC3_SCALE) at frame[0]
+        (call $make (frame.addr 0)
+              (f64.const 3.0)
+              (f64.const 0.0)
+              (f64.mul (f64.convert_i32_s (i32.sub $n $i)) (const $VEC3_SCALE)))
+
+        ;; Store A + B into `elem->pos`
+        (local.set $pos_ptr (field.addr $sample $pos $elem))
+        (call $add $pos_ptr (frame.addr 0) (frame.addr 24))
+
+        ;; Compute `base_len = vec3_length(elem->pos)` ( since x=3, y=4, z=2*(n-i) )
+        (local.set $base_len (call $length $pos_ptr))
+
+        ;; Apply caller callback `bonus_cb(id, base_len)` if non-null
+        (if (i32.eqz (ptr.eqz $bonus_cb))
+          (then
+            (local.set $sc
+              (call_indirect (param i32) (param f64) (result f64)
+                $i $base_len $bonus_cb)))
+          (else
+            (local.set $sc $base_len)))
+
+        (field.set $sample $score $elem $sc)
+        (local.set $i (i32.add $i (i32.const 1)))
+        (br $init_lp)))
+
+    ;; Sort `$arr` in ascending score order using `$stdlib:qsort`
+    (call $qsort $arr $n (sizeof $sample) (ref.func $cmp_sample_score_asc))
+    (global.set $sorted_runs (i32.add (global.get $sorted_runs) (i32.const 1)))
+
+    ;; Sum sorted scores
+    (local.set $total (f64.const 0.0))
+    (local.set $i (i32.const 0))
+    (block $sum_done
+      (loop $sum_lp
+        (br_if $sum_done (i32.ge_s $i $n))
+        (local.set $elem (ptr.add $arr (i32.mul $i (sizeof $sample))))
+        (local.set $total (f64.add $total (field.get $sample $score $elem)))
+        (local.set $i (i32.add $i (i32.const 1)))
+        (br $sum_lp)))
+    (return $total))
+
+  ;; Format a `$sample` into `$buf` via variadic `$stdio:snprintf`
+  (func $format_sample (export "format_sample")
+    (param $buf ptr) (param $cap i32) (param $s ptr) (result i32)
+    (return
+      (call $snprintf $buf $cap (ref.data $fmt_sample)
+            (ref.data $tag_label)
+            (field.get $sample $id $s)
+            (field.get $sample $tag $s)
+            (field.get $sample $score $s)))))

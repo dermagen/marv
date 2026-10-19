@@ -1,0 +1,70 @@
+;;; stdlib.mvh — MARV general utilities interface
+;;; Matches WCPL `stdlib.wo` and native `lib/stdlib.c` (MARV internal ABI).
+;;; Record returns (`div`, `ldiv`, `lldiv`) follow the WCPL model: destination
+;;; pointer `$rp : ptr` is passed as the first argument and return type is void.
+
+(mvh-include system $errno)
+(mvh-include system $ctype)
+(mvh-include system $string)
+(mvh-include system $math)
+(mvh-include system $unistd)
+
+(interface $stdlib
+  (const $EXIT_SUCCESS i32 0)
+  (const $EXIT_FAILURE i32 1)
+  (const $MB_CUR_MAX   i32 4)
+  (const $RAND_MAX     i32 #x7fffffff)
+
+  (record $div_t
+    (field $quot i32)
+    (field $rem  i32))
+
+  (record $ldiv_t
+    (field $quot i32)
+    (field $rem  i32))
+
+  (record $lldiv_t
+    (field $quot i64)
+    (field $rem  i64))
+
+  (func $atof    (param $s ptr) (result f64))
+  (func $atoi    (param $s ptr) (result i32))
+  (func $atol    (param $s ptr) (result i32))
+  (func $atoll   (param $s ptr) (result i64))
+  (func $strtod  (param $s ptr) (param $end ptr) (result f64))
+  (func $strtol  (param $s ptr) (param $end ptr) (param $base i32) (result i32))
+  (func $strtoll (param $s ptr) (param $end ptr) (param $base i32) (result i64))
+  (func $strtoul (param $s ptr) (param $end ptr) (param $base i32) (result i32))
+  (func $strtoull (param $s ptr) (param $end ptr) (param $base i32) (result i64))
+
+  (func $rand    (result i32))
+  (func $srand   (param $seed i32))
+
+  (func $calloc  (param $n i32) (param $sz i32) (result ptr))
+  (func $free    (param $ptr ptr))
+  (func $malloc  (param $sz i32) (result ptr))
+  (func $realloc (param $ptr ptr) (param $sz i32) (result ptr))
+
+  (func $abort   )
+  (func $atexit  (param $func ptr) (result i32))
+  (func $exit    (param $status i32))
+  (func $getenv  (param $name ptr) (result ptr))
+
+  (func $bsearch (param $key ptr) (param $base ptr) (param $n i32) (param $sz i32) (param $cmp ptr) (result ptr))
+  (func $qsort   (param $base ptr) (param $n i32) (param $sz i32) (param $cmp ptr))
+
+  (func $abs     (param $n i32) (result i32))
+  (func $labs    (param $n i32) (result i32))
+  (func $llabs   (param $n i64) (result i64))
+
+  ;; Record returns following WCPL model: first argument is `$rp : ptr`
+  (func $div     (param $n i32) (param $d i32) (result (record $div_t)))
+  (func $ldiv    (param $n i32) (param $d i32) (result (record $ldiv_t)))
+  (func $lldiv   (param $n i64) (param $d i64) (result (record $lldiv_t)))
+
+  (func $mblen    (param $s ptr) (param $n i32) (result i32))
+  (func $mbtowc   (param $pwc ptr) (param $s ptr) (param $n i32) (result i32))
+  (func $wctomb   (param $s ptr) (param $wc i32) (result i32))
+  (func $mbstowcs (param $pwcs ptr) (param $s ptr) (param $n i32) (result i32))
+  (func $wcstombs (param $s ptr) (param $pwcs ptr) (param $n i32) (result i32))
+)

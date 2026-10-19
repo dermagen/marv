@@ -1,0 +1,37 @@
+;;; time.mvh — MARV date and time interface
+;;; Matches WCPL `time.wo` and native `lib/time.c` (MARV internal ABI).
+
+(mvh-include system $errno)
+(mvh-include system $stdlib)
+(mvh-include system $string)
+(mvh-include system $stdio)
+
+(interface $time
+  (const $CLOCKS_PER_SEC i64 1000000000)
+
+  (record $tm
+    (field $tm_sec   i32)
+    (field $tm_min   i32)
+    (field $tm_hour  i32)
+    (field $tm_mday  i32)
+    (field $tm_mon   i32)
+    (field $tm_year  i32)
+    (field $tm_wday  i32)
+    (field $tm_yday  i32)
+    (field $tm_isdst i32))
+
+  (func $clock       (result i64))
+  (func $difftime    (param $t1 i64) (param $t0 i64) (result f64))
+  (func $mktime      (param $ptm ptr) (result i64))
+  (func $time        (param $pt ptr) (result i64))
+  (func $asctime     (param $ptm ptr) (result ptr))
+  (func $ctime       (param $pt ptr) (result ptr))
+  (func $gmtime      (param $pt ptr) (result ptr))
+  (func $localtime   (param $pt ptr) (result ptr))
+  (func $strftime    (param $s ptr) (param $maxsz i32) (param $fmt ptr) (param $ptm ptr) (result i32))
+  (func $tzset       )
+  (func $gmtime_r    (param $pt ptr) (param $ptm ptr) (result ptr))
+  (func $localtime_r (param $pt ptr) (param $ptm ptr) (result ptr))
+  (func $ctime_r     (param $pt ptr) (param $buf ptr) (result ptr))
+  (func $asctime_r   (param $ptm ptr) (param $buf ptr) (result ptr))
+)

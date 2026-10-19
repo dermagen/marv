@@ -1,0 +1,424 @@
+;; =============================================================================
+;; mstd/examples/queens.mvs -- 8-Queens Solver in MARV-ABI Standard Library Style
+;;
+;; Demonstrates:
+;;   1. Modular `.mvh` system includes (`$stdio`, `$stdlib`, `$string`, `$ctype`)
+;;      with zero `c-` prefixes or `c.call` instructions.
+;;   2. Must-tail-recursive (`return_call`) backtracking state machine
+;;      (`$step_place` <-> `$step_backtrack`) solving all 92 8-Queens boards in
+;;      bounded O(1) stack space.
+;;   3. Dynamic heap allocation (`malloc`/`free`), `qsort` & `bsearch` with a
+;;      normal MARV comparator (`(ref.func $cmp_packed)`), and `div` with
+;;      WCPL/MARV `rp$` destination pointer convention.
+;;   4. Variadic `snprintf` (lowered automatically to 16-byte `va_arg_t` slots
+;;      in the caller's stack frame) + `fputs`/`fflush` on `(const $stdout)`.
+;; =============================================================================
+
+(mvh-include system $stdio)
+(mvh-include system $stdlib)
+(mvh-include system $string)
+(mvh-include system $ctype)
+
+(module $queens
+
+  ;; ---------------------------------------------------------------------------
+  ;; Static ASCII String Literals
+  ;; ---------------------------------------------------------------------------
+  (data $banner         const align=1
+    "========================================\n  MARV 8-Queens Solver (N = 8)\n========================================\n\x00;")
+  (data $sol_hdr_fmt    const align=1
+    "\nSolution #%d (packed=0x%08X, moves=%s):\n\x00;")
+  (data $col_hdr        const align=1
+    "    a   b   c   d   e   f   g   h\n\x00;")
+  (data $row_sep        const align=1
+    "  +---+---+---+---+---+---+---+---+\n\x00;")
+  (data $cell_queen     const align=1 "| Q \x00;")
+  (data $cell_dark      const align=1 "| . \x00;")
+  (data $cell_light     const align=1 "|   \x00;")
+  (data $row_prefix_fmt const align=1 "%d \x00;")
+  (data $row_suffix_fmt const align=1 "| %d\n\x00;")
+  (data $summary_fmt    const align=1
+    "\nTotal solutions found : %d (92 expected)\nQuotient/rem by 8     : %d full groups + %d\nFirst packed board    : 0x%08X\nLast  packed board    : 0x%08X\nbsearch(last) index   : %d\n\x00;")
+
+  ;; ---------------------------------------------------------------------------
+  ;; 1. Board Packing, Unpacking & Algebraic Move Formatting
+  ;; ---------------------------------------------------------------------------
+
+  ;; Pack `i32 cols[8]` at `$cols_ptr` into a single 32-bit integer:
+  ;;   row 0 in bits 28..31, row 1 in bits 24..27, ..., row 7 in bits 0..3.
+  (func $pack_board
+    (param $cols_ptr ptr)
+    (result i32)
+    (local $r i32)
+    (local $acc i32)
+    (local.set $r (i32.const 0))
+    (local.set $acc (i32.const 0))
+    (block $done
+      (loop $lp
+        (br_if $done (i32.ge_s (local.get $r) (i32.const 8)))
+        (local.set $acc
+          (i32.or
+            (i32.shl (local.get $acc) (i32.const 4))
+            (i32.and
+              (i32.load (ptr.add (local.get $cols_ptr) (i32.shl (local.get $r) (i32.const 2))))
+              (i32.const 7))))
+        (local.set $r (i32.add (local.get $r) (i32.const 1)))
+        (br $lp)))
+    (return (local.get $acc)))
+
+  ;; Extract the queen column (0..7) for `$row` (0..7) from `$packed`
+  (func $unpack_col
+    (param $packed i32) (param $row i32)
+    (result i32)
+    (return
+      (i32.and
+        (i32.shr_u
+          (local.get $packed)
+          (i32.shl (i32.sub (i32.const 7) (local.get $row)) (i32.const 2)))
+        (i32.const 7))))
+
+  ;; Format a packed board as chess algebraic coordinates into `$buf` (24 bytes):
+  ;; e.g. "a8 e7 h6 f5 c4 g3 b2 d1"
+  (func $format_algebraic
+    (param $packed i32) (param $buf ptr)
+    (local $r i32)
+    (local $col i32)
+    (local $pos i32)
+    (local $file_ch i32)
+    (local $rank_ch i32)
+    (local.set $r (i32.const 0))
+    (loop $lp
+      (local.set $col (call $unpack_col (local.get $packed) (local.get $r)))
+      (local.set $pos (i32.mul (local.get $r) (i32.const 3)))
+      (local.set $file_ch (call $tolower (i32.add (i32.const 65) (local.get $col))))
+      (local.set $rank_ch (i32.sub (i32.const 56) (local.get $r))) ;; '8' - r
+      (i32.store8 (ptr.add (local.get $buf) (local.get $pos)) (local.get $file_ch))
+      (i32.store8 (ptr.add (local.get $buf) (i32.add (local.get $pos) (i32.const 1))) (local.get $rank_ch))
+      (if (i32.lt_s (local.get $r) (i32.const 7))
+        (then
+          (i32.store8 (ptr.add (local.get $buf) (i32.add (local.get $pos) (i32.const 2))) (i32.const 32)))
+        (else
+          (i32.store8 (ptr.add (local.get $buf) (i32.add (local.get $pos) (i32.const 2))) (i32.const 0))))
+      (local.set $r (i32.add (local.get $r) (i32.const 1)))
+      (br_if $lp (i32.lt_s (local.get $r) (i32.const 8)))))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 2. ASCII Chessboard Renderer (`$print_ascii_board`)
+  ;; ---------------------------------------------------------------------------
+  (func $print_ascii_board
+    (param $sol_num i32) (param $packed i32)
+    (frame 128) ;; frame[0..31] = algebraic string, frame[32..127] = snprintf scratch
+    (local $out ptr)
+    (local $row i32)
+    (local $col i32)
+    (local $qcol i32)
+    (local $rank i32)
+
+    (local.set $out (const $stdout))
+    (call $format_algebraic (local.get $packed) (frame.addr 0))
+
+    ;; Print "\nSolution #%d (packed=0x%08X, moves=%s):\n"
+    (drop
+      (call $snprintf
+        (frame.addr 32)
+        (i32.const 96)
+        (ref.data $sol_hdr_fmt)
+        (local.get $sol_num)
+        (local.get $packed)
+        (frame.addr 0)))
+    (drop (call $fputs (frame.addr 32) (local.get $out)))
+    (drop (call $fputs (ref.data $col_hdr) (local.get $out)))
+
+    (local.set $row (i32.const 0))
+    (loop $row_lp
+      (local.set $rank (i32.sub (i32.const 8) (local.get $row)))
+      (local.set $qcol (call $unpack_col (local.get $packed) (local.get $row)))
+
+      (drop (call $fputs (ref.data $row_sep) (local.get $out)))
+
+      ;; Left rank label
+      (drop
+        (call $snprintf
+          (frame.addr 32)
+          (i32.const 16)
+          (ref.data $row_prefix_fmt)
+          (local.get $rank)))
+      (drop (call $fputs (frame.addr 32) (local.get $out)))
+
+      ;; 8 squares in this rank
+      (local.set $col (i32.const 0))
+      (loop $col_lp
+        (if (i32.eq (local.get $col) (local.get $qcol))
+          (then
+            (drop (call $fputs (ref.data $cell_queen) (local.get $out))))
+          (else
+            (if (i32.and (i32.add (local.get $row) (local.get $col)) (i32.const 1))
+              (then (drop (call $fputs (ref.data $cell_dark)  (local.get $out))))
+              (else (drop (call $fputs (ref.data $cell_light) (local.get $out)))))))
+        (local.set $col (i32.add (local.get $col) (i32.const 1)))
+        (br_if $col_lp (i32.lt_s (local.get $col) (i32.const 8))))
+
+      ;; Right rank label
+      (drop
+        (call $snprintf
+          (frame.addr 32)
+          (i32.const 16)
+          (ref.data $row_suffix_fmt)
+          (local.get $rank)))
+      (drop (call $fputs (frame.addr 32) (local.get $out)))
+
+      (local.set $row (i32.add (local.get $row) (i32.const 1)))
+      (br_if $row_lp (i32.lt_s (local.get $row) (i32.const 8))))
+
+    (drop (call $fputs (ref.data $row_sep) (local.get $out)))
+    (drop (call $fputs (ref.data $col_hdr) (local.get $out))))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 3. Must-Tail-Recursive Backtracking Solver (`$step_place` / `$step_backtrack`)
+  ;;
+  ;; State layout at `$state` (48 bytes):
+  ;;   offset 0..31  : i32 cols[8]
+  ;;   offset 32..35 : i32 count
+  ;;   offset 40..47 : ptr sol_buf (8-byte pointer slot to `i32[128]`)
+  ;; ---------------------------------------------------------------------------
+  (func $step_place
+    (param $row i32) (param $col i32)
+    (param $cols_mask i32) (param $diag1_mask i32) (param $diag2_mask i32)
+    (param $state ptr)
+    (result i32)
+    (local $cnt i32)
+    (local $packed i32)
+    (local $sol_buf ptr)
+    (local $c_bit i32)
+    (local $d1_bit i32)
+    (local $d2_bit i32)
+    (local $conflict i32)
+
+    ;; Base case 1: `$row == 8` -> record solution and backtrack to row 7
+    (if (i32.eq (local.get $row) (i32.const 8))
+      (then
+        (local.set $cnt (i32.load offset=32 (local.get $state)))
+        (local.set $packed (call $pack_board (local.get $state)))
+        (local.set $sol_buf (ptr.load offset=40 (local.get $state)))
+        (i32.store
+          (ptr.add (local.get $sol_buf) (i32.shl (local.get $cnt) (i32.const 2)))
+          (local.get $packed))
+        (i32.store offset=32 (local.get $state) (i32.add (local.get $cnt) (i32.const 1)))
+        (return_call $step_backtrack
+          (i32.const 7)
+          (i32.const 0)
+          (local.get $cols_mask)
+          (local.get $diag1_mask)
+          (local.get $diag2_mask)
+          (local.get $state))))
+
+    ;; Base case 2: `$col >= 8` -> exhausted columns in `$row`, backtrack to `$row - 1`
+    (if (i32.ge_s (local.get $col) (i32.const 8))
+      (then
+        (return_call $step_backtrack
+          (i32.sub (local.get $row) (i32.const 1))
+          (i32.const 0)
+          (local.get $cols_mask)
+          (local.get $diag1_mask)
+          (local.get $diag2_mask)
+          (local.get $state))))
+
+    ;; Check if `(row, col)` is under attack
+    (local.set $c_bit  (i32.shl (i32.const 1) (local.get $col)))
+    (local.set $d1_bit (i32.shl (i32.const 1) (i32.add (local.get $row) (local.get $col))))
+    (local.set $d2_bit (i32.shl (i32.const 1)
+                                (i32.add (i32.sub (local.get $row) (local.get $col)) (i32.const 7))))
+    (local.set $conflict
+      (i32.or
+        (i32.and (local.get $cols_mask) (local.get $c_bit))
+        (i32.or
+          (i32.and (local.get $diag1_mask) (local.get $d1_bit))
+          (i32.and (local.get $diag2_mask) (local.get $d2_bit)))))
+
+    (if (i32.eqz (local.get $conflict))
+      (then
+        ;; Place queen at `(row, col)` and advance to `(row + 1, 0)` via tail call
+        (i32.store
+          (ptr.add (local.get $state) (i32.shl (local.get $row) (i32.const 2)))
+          (local.get $col))
+        (return_call $step_place
+          (i32.add (local.get $row) (i32.const 1))
+          (i32.const 0)
+          (i32.or (local.get $cols_mask)  (local.get $c_bit))
+          (i32.or (local.get $diag1_mask) (local.get $d1_bit))
+          (i32.or (local.get $diag2_mask) (local.get $d2_bit))
+          (local.get $state)))
+      (else
+        ;; Try next column `(row, col + 1)` via tail call
+        (return_call $step_place
+          (local.get $row)
+          (i32.add (local.get $col) (i32.const 1))
+          (local.get $cols_mask)
+          (local.get $diag1_mask)
+          (local.get $diag2_mask)
+          (local.get $state)))))
+
+  (func $step_backtrack
+    (param $row i32) (param $unused_col i32)
+    (param $cols_mask i32) (param $diag1_mask i32) (param $diag2_mask i32)
+    (param $state ptr)
+    (result i32)
+    (local $prev_col i32)
+    (local $c_bit i32)
+    (local $d1_bit i32)
+    (local $d2_bit i32)
+
+    ;; When `$row < 0`, backtracking is finished; return total solution count!
+    (if (i32.lt_s (local.get $row) (i32.const 0))
+      (then
+        (return (i32.load offset=32 (local.get $state)))))
+
+    ;; Remove queen at `(row, prev_col)` and resume `$step_place` at `(row, prev_col + 1)`
+    (local.set $prev_col
+      (i32.load (ptr.add (local.get $state) (i32.shl (local.get $row) (i32.const 2)))))
+    (local.set $c_bit  (i32.shl (i32.const 1) (local.get $prev_col)))
+    (local.set $d1_bit (i32.shl (i32.const 1) (i32.add (local.get $row) (local.get $prev_col))))
+    (local.set $d2_bit (i32.shl (i32.const 1)
+                                (i32.add (i32.sub (local.get $row) (local.get $prev_col)) (i32.const 7))))
+
+    (return_call $step_place
+      (local.get $row)
+      (i32.add (local.get $prev_col) (i32.const 1))
+      (i32.xor (local.get $cols_mask)  (local.get $c_bit))
+      (i32.xor (local.get $diag1_mask) (local.get $d1_bit))
+      (i32.xor (local.get $diag2_mask) (local.get $d2_bit))
+      (local.get $state)))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 4. Normal MARV Comparator Callback for `qsort` / `bsearch`
+  ;; ---------------------------------------------------------------------------
+  (func $cmp_packed
+    (param $pa ptr) (param $pb ptr)
+    (result i32)
+    (local $a i32)
+    (local $b i32)
+    (local.set $a (i32.load (local.get $pa)))
+    (local.set $b (i32.load (local.get $pb)))
+    (return
+      (i32.sub
+        (i32.gt_s (local.get $a) (local.get $b))
+        (i32.lt_s (local.get $a) (local.get $b)))))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 5. Top-Level Solver & Reporter (`solve_eight_queens` and `main`)
+  ;; ---------------------------------------------------------------------------
+  ;; Frame layout (256 bytes user frame + automatic va_arg_t area):
+  ;;   frame[0..47]    : solver state (cols[8], count, sol_buf ptr)
+  ;;   frame[48..55]   : div_t record return slot
+  ;;   frame[56..63]   : bsearch key slot
+  ;;   frame[64..255]  : snprintf output buffer
+  (func $solve_eight_queens (export "solve_eight_queens")
+    (param $print_boards i32)
+    (result i32)
+    (frame 256)
+    (local $sol_buf ptr)
+    (local $count i32)
+    (local $first_sol i32)
+    (local $last_sol i32)
+    (local $found_ptr ptr)
+    (local $found_idx i32)
+    (local $q i32)
+    (local $rem i32)
+    (local $out ptr)
+
+    ;; Allocate space for 128 packed 32-bit solutions (512 bytes)
+    (local.set $sol_buf (call $malloc (i32.const 512)))
+    (if (ptr.eqz (local.get $sol_buf))
+      (then (return (i32.const -1))))
+
+    ;; Initialize solver state in frame[0..47]
+    (drop (call $memset (frame.addr 0) (i32.const 0) (i32.const 48)))
+    (ptr.store offset=40 (frame.addr 0) (local.get $sol_buf))
+
+    ;; Run must-tail-recursive backtracking solver starting at row=0, col=0
+    (local.set $count
+      (call $step_place
+        (i32.const 0) (i32.const 0)
+        (i32.const 0) (i32.const 0) (i32.const 0)
+        (frame.addr 0)))
+
+    ;; Sort the 92 packed solutions via `qsort`
+    (call $qsort
+      (local.get $sol_buf)
+      (local.get $count)
+      (i32.const 4)
+      (ref.func $cmp_packed))
+
+    (local.set $first_sol (i32.load offset=0   (local.get $sol_buf)))
+    (local.set $last_sol  (i32.load offset=364 (local.get $sol_buf))) ;; index 91 * 4 = 364
+
+    ;; Locate `$last_sol` via `bsearch`
+    (i32.store (frame.addr 56) (local.get $last_sol))
+    (local.set $found_ptr
+      (call $bsearch
+        (frame.addr 56)
+        (local.get $sol_buf)
+        (local.get $count)
+        (i32.const 4)
+        (ref.func $cmp_packed)))
+
+    (local.set $found_idx
+      (if (result i32) (ptr.eqz (local.get $found_ptr))
+        (then (i32.const -1))
+        (else (i32.shr_s (ptr.diff (local.get $found_ptr) (local.get $sol_buf)) (i32.const 2)))))
+
+    ;; Compute `div(rp$, count, 8)` -> quot = 11, rem = 4
+    (call $div (frame.addr 48) (local.get $count) (i32.const 8))
+    (local.set $q   (field.get $div_t $quot (frame.addr 48)))
+    (local.set $rem (field.get $div_t $rem  (frame.addr 48)))
+
+    ;; Optionally print ASCII boards & summary to stdout
+    (if (i32.ne (local.get $print_boards) (i32.const 0))
+      (then
+        (local.set $out (const $stdout))
+        (drop (call $fputs (ref.data $banner) (local.get $out)))
+        (call $print_ascii_board (i32.const 1) (local.get $first_sol))
+        (call $print_ascii_board (local.get $count) (local.get $last_sol))
+        (drop
+          (call $snprintf
+            (frame.addr 64)
+            (i32.const 192)
+            (ref.data $summary_fmt)
+            (local.get $count)
+            (local.get $q)
+            (local.get $rem)
+            (local.get $first_sol)
+            (local.get $last_sol)
+            (local.get $found_idx)))
+        (drop (call $fputs (frame.addr 64) (local.get $out)))
+        (drop (call $fflush (local.get $out)))))
+
+    (call $free (local.get $sol_buf))
+
+    ;; Verify invariants:
+    ;;   count == 92
+    ;;   first_sol == 0x04752613 ([0, 4, 7, 5, 2, 6, 1, 3])
+    ;;   last_sol  == 0x73025164 ([7, 3, 0, 2, 5, 1, 6, 4])
+    ;;   found_idx == 91
+    ;;   q == 11 && rem == 4
+    (if (i32.and
+          (i32.eq (local.get $count) (i32.const 92))
+          (i32.and
+            (i32.eq (local.get $first_sol) (i32.const #x04752613))
+            (i32.and
+              (i32.eq (local.get $last_sol) (i32.const #x73025164))
+              (i32.and
+                (i32.eq (local.get $found_idx) (i32.const 91))
+                (i32.and
+                  (i32.eq (local.get $q) (i32.const 11))
+                  (i32.eq (local.get $rem) (i32.const 4)))))))
+      (then (return (local.get $count)))
+      (else (return (i32.const -2)))))
+
+  (func $main (export "main")
+    (param $argc i32) (param $argv ptr)
+    (result i32)
+    (if (i32.eq (call $solve_eight_queens (i32.const 1)) (i32.const 92))
+      (then (return (const $EXIT_SUCCESS)))
+      (else (return (const $EXIT_FAILURE)))))
+)

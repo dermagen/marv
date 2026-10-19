@@ -1,0 +1,87 @@
+;;; stdio.mvh — MARV standard input/output interface
+;;; Formulated in MARV's internal ABI matching WCPL `stdio.wo` and native `lib/stdio.c`.
+;;; Variadic functions use `(param ...)`, which lowers to WCPL's trailing `$ap$ : ptr`
+;;; pointing to an array of 16-byte `va_arg_t` slots in the caller's stack frame.
+
+(mvh-include system $errno)
+(mvh-include system $ctype)
+(mvh-include system $string)
+(mvh-include system $stdlib)
+(mvh-include system $fcntl)
+(mvh-include system $unistd)
+
+(interface $stdio
+  (const $EOF          i32 -1)
+  (const $BUFSIZ       i32 1024)
+  (const $SBFSIZ       i32 8)
+  (const $FOPEN_MAX    i32 20)
+  (const $FILENAME_MAX i32 260)
+
+  (const $SEEK_SET i32 0)
+  (const $SEEK_CUR i32 1)
+  (const $SEEK_END i32 2)
+
+  (const $_IOFBF   i32 0)
+  (const $_IOREAD  i32 1)
+  (const $_IOWRT   i32 2)
+  (const $_IONBF   i32 4)
+  (const $_IOEOF   i32 16)
+  (const $_IOERR   i32 32)
+  (const $_IOLBF   i32 64)
+  (const $_IORW    i32 128)
+  (const $_IOMYBUF i32 256)
+
+  ;; Standard I/O table: 20 * 32-byte FILE slots (`_iob[0..2]` = stdin, stdout, stderr)
+  (data $_iob var align=4 size=640)
+
+  (const $stdin  (ref.data $stdio:_iob))
+  (const $stdout (ptr.add (ref.data $stdio:_iob) (i32.const 32)))
+  (const $stderr (ptr.add (ref.data $stdio:_iob) (i32.const 64)))
+
+  (func $fopen    (param $filename ptr) (param $mode ptr) (result ptr))
+  (func $fdopen   (param $fd i32) (param $mode ptr) (result ptr))
+  (func $freopen  (param $filename ptr) (param $mode ptr) (param $stream ptr) (result ptr))
+  (func $fclose   (param $stream ptr) (result i32))
+  (func $fgetc    (param $stream ptr) (result i32))
+  (func $fgets    (param $s ptr) (param $n i32) (param $stream ptr) (result ptr))
+  (func $fputc    (param $c i32) (param $stream ptr) (result i32))
+  (func $fputs    (param $s ptr) (param $stream ptr) (result i32))
+  (func $puts     (param $s ptr) (result i32))
+  (func $ungetc   (param $c i32) (param $stream ptr) (result i32))
+  (func $fread    (param $ptr ptr) (param $size i32) (param $nobj i32) (param $stream ptr) (result i32))
+  (func $fwrite   (param $ptr ptr) (param $size i32) (param $nobj i32) (param $stream ptr) (result i32))
+  (func $fseek    (param $stream ptr) (param $offset i32) (param $origin i32) (result i32))
+  (func $ftell    (param $stream ptr) (result i32))
+  (func $rewind   (param $stream ptr))
+  (func $fgetpos  (param $stream ptr) (param $pos ptr) (result i32))
+  (func $fsetpos  (param $stream ptr) (param $pos ptr) (result i32))
+  (func $fflush   (param $stream ptr) (result i32))
+  (func $setvbuf  (param $stream ptr) (param $buf ptr) (param $mode i32) (param $size i32) (result i32))
+  (func $setbuf   (param $stream ptr) (param $buf ptr))
+
+  ;; Variadic formatted output & input (WCPL model: trailing $ap$ : ptr to 16-byte va_arg_t slots)
+  (func $fprintf  (param $stream ptr) (param $format ptr) (param ...) (result i32))
+  (func $printf   (param $format ptr) (param ...) (result i32))
+  (func $sprintf  (param $s ptr) (param $format ptr) (param ...) (result i32))
+  (func $snprintf (param $s ptr) (param $count i32) (param $format ptr) (param ...) (result i32))
+
+  (func $vprintf   (param $format ptr) (param $va ptr) (result i32))
+  (func $vfprintf  (param $stream ptr) (param $format ptr) (param $va ptr) (result i32))
+  (func $vsprintf  (param $s ptr) (param $format ptr) (param $va ptr) (result i32))
+  (func $vsnprintf (param $s ptr) (param $count i32) (param $format ptr) (param $va ptr) (result i32))
+
+  (func $fscanf   (param $stream ptr) (param $format ptr) (param ...) (result i32))
+  (func $scanf    (param $format ptr) (param ...) (result i32))
+  (func $sscanf   (param $s ptr) (param $format ptr) (param ...) (result i32))
+  (func $snscanf  (param $s ptr) (param $count i32) (param $format ptr) (param ...) (result i32))
+
+  (func $vfscanf  (param $stream ptr) (param $format ptr) (param $va ptr) (result i32))
+  (func $vscanf   (param $format ptr) (param $va ptr) (result i32))
+  (func $vsscanf  (param $s ptr) (param $format ptr) (param $va ptr) (result i32))
+  (func $vsnscanf (param $s ptr) (param $count i32) (param $format ptr) (param $va ptr) (result i32))
+
+  (func $remove   (param $filename ptr) (result i32))
+  (func $rename   (param $oldname ptr) (param $newname ptr) (result i32))
+  (func $renameat (param $oldfd i32) (param $oldpath ptr) (param $newfd i32) (param $newpath ptr) (result i32))
+  (func $perror   (param $s ptr))
+)

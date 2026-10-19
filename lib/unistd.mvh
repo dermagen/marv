@@ -1,0 +1,40 @@
+;;; unistd.mvh — MARV POSIX-like symbolic constants and system calls
+;;; Matches WCPL `unistd.wo` and native `lib/unistd.c` (MARV internal ABI).
+
+(mvh-include system $errno)
+(mvh-include system $fcntl)
+(mvh-include system $string)
+
+(interface $unistd
+  (const $STDIN_FILENO  i32 0)
+  (const $STDOUT_FILENO i32 1)
+  (const $STDERR_FILENO i32 2)
+
+  (const $F_OK i32 0)
+  (const $X_OK i32 1)
+  (const $W_OK i32 2)
+  (const $R_OK i32 4)
+
+  (func $read       (param $fd i32) (param $buf ptr) (param $n i32) (result i32))
+  (func $write      (param $fd i32) (param $buf ptr) (param $n i32) (result i32))
+  (func $pread      (param $fd i32) (param $buf ptr) (param $nbyte i32) (param $offset i64) (result i32))
+  (func $pwrite     (param $fd i32) (param $buf ptr) (param $nbyte i32) (param $offset i64) (result i32))
+  (func $lseek      (param $fd i32) (param $offset i64) (param $whence i32) (result i64))
+  (func $ftruncate  (param $fd i32) (param $length i64) (result i32))
+  (func $close      (param $fd i32) (result i32))
+  (func $isatty     (param $fd i32) (result i32))
+  (func $access     (param $path ptr) (param $amode i32) (result i32))
+  (func $unlinkat   (param $fd i32) (param $path ptr) (param $atflag i32) (result i32))
+  (func $unlink     (param $path ptr) (result i32))
+  (func $linkat     (param $oldfd i32) (param $oldpath ptr) (param $newfd i32) (param $newpath ptr) (param $atflag i32) (result i32))
+  (func $link       (param $oldpath ptr) (param $newpath ptr) (result i32))
+  (func $symlinkat  (param $tgtpath ptr) (param $fd i32) (param $lnkpath ptr) (result i32))
+  (func $symlink    (param $tgtpath ptr) (param $lnkpath ptr) (result i32))
+  (func $readlinkat (param $fd i32) (param $path ptr) (param $buf ptr) (param $bufsize i32) (result i32))
+  (func $readlink   (param $path ptr) (param $buf ptr) (param $bufsize i32) (result i32))
+  (func $rmdirat    (param $fd i32) (param $path ptr) (result i32))
+  (func $rmdir      (param $path ptr) (result i32))
+  (func $fdatasync  (param $fd i32) (result i32))
+  (func $fsync      (param $fd i32) (result i32))
+  (func $_exit      (param $status i32))
+)

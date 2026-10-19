@@ -1,0 +1,149 @@
+;; =============================================================================
+;; mstd/examples/multimod/app.mvs -- Implementation of MARV Module 3 (`$app`)
+;; Includes its own `app.mvh`, sibling `vec3.mvh` & `stats.mvh`, and system
+;; `stdio`, `stdlib`, and `string`.
+;; =============================================================================
+
+(mvh-include $app)
+(mvh-include $vec3)
+(mvh-include $stats)
+(mvh-include system $stdio)
+(mvh-include system $stdlib)
+(mvh-include system $string)
+
+(module $app
+
+  (data $hdr_line  const align=8 "=== MARV 3-Module Separate Compilation Demo (vec3 + stats + app) ===\x00;")
+  (data $pass_line const align=8 "=== ALL 3-MODULE LINKING CHECKS PASSED ===\x00;")
+  (data $exp_first const align=8 "SAMPLE#3(tag=103,score=35.0)\x00;")
+
+  ;; Callback invoked via `call_indirect` inside `stats.mvs`:
+  ;; computes `base_len * base_len + id` so scores are exact integers:
+  ;;   For n = 4:
+  ;;     id = 0: z = 8 -> x^2+y^2+z^2 = 9+16+64 = 89 + 0 = 89.0
+  ;;     id = 1: z = 6 -> x^2+y^2+z^2 = 9+16+36 = 61 + 1 = 62.0
+  ;;     id = 2: z = 4 -> x^2+y^2+z^2 = 9+16+16 = 41 + 2 = 43.0
+  ;;     id = 3: z = 2 -> x^2+y^2+z^2 = 9+16+4  = 29 + 3 = 32.0 + 3 = 35.0
+  ;;Wait: let's make `bonus_for_id` compute `round(base_len * base_len) + 2*id`:
+  ;;   Even simpler: `base_len * base_len + 2.0 * id`!
+  ;;     id = 0: (9+16+64) + 0 = 89.0
+  ;;     id = 1: (9+16+36) + 2 = 63.0
+  ;;     id = 2: (9+16+16) + 4 = 45.0
+  ;;     id = 3: (9+16+4)  + 6 = 35.0
+  ;;   Sorted ascending by score:
+  ;;     [0]: id=3, tag=103, score=35.0
+  ;;     [1]: id=2, tag=102, score=45.0
+  ;;     [2]: id=1, tag=101, score=63.0
+  ;;     [3]: id=0, tag=100, score=89.0
+  ;;   Total sum = 35 + 45 + 63 + 89 = 232.0!
+  (func $bonus_for_id (export "bonus_for_id")
+    (param $id i32) (param $base_len f64) (result f64)
+    (return
+      (f64.convert_i32_s
+        (i32.add
+          (i32.trunc_f64_s (f64.add (f64.mul $base_len $base_len) (f64.const 0.5)))
+          (i32.mul (i32.const 2) $id)))))
+
+  ;; Frame layout (160 bytes):
+  ;;   [0..39]   : key `$sample` record for `$stdlib:bsearch`
+  ;;   [40..63]  : `$vec3` cross-product output
+  ;;   [64..127] : text buffer for `$stats:format_sample`
+  (func $run_multimod_suite (export "run_multimod_suite")
+    (param $verbose i32) (result i32)
+    (frame 160)
+    (local $arr ptr) (local $total f64) (local $found ptr)
+    (local $len i32) (local $va_res i32) (local $i i32)
+
+    (if (i32.ne $verbose (i32.const 0))
+      (then (drop (call $puts (ref.data $hdr_line)))))
+
+    ;; 1. Allocate 4 `$sample` records (4 * 40 = 160 bytes)
+    (local.set $arr
+      (call $malloc (i32.mul (const $NUM_SAMPLES) (sizeof $sample))))
+    (if (ptr.eqz $arr)
+      (then (return (i32.const -1))))
+
+    ;; 2. Call `stats:build_and_sort_samples` with our `app:bonus_for_id` callback
+    (local.set $total
+      (call $build_and_sort_samples
+            $arr (const $NUM_SAMPLES) (ref.func $bonus_for_id)))
+
+    ;; Verify total score == 232.0 (within 1e-6)
+    (if (i32.ne (i32.trunc_f64_s (f64.add $total (f64.const 0.5))) (i32.const 232))
+      (then (call $free $arr) (return (i32.const -2))))
+
+    ;; Verify sorted order: first element has id=3 (score=35.0), last has id=0 (score=89.0)
+    (if (i32.ne (field.get $sample $id $arr) (i32.const 3))
+      (then (call $free $arr) (return (i32.const -3))))
+    (if (i32.ne (field.get $sample $id (ptr.add $arr (i32.mul (i32.const 3) (sizeof $sample))))
+                (i32.const 0))
+      (then (call $free $arr) (return (i32.const -4))))
+
+    ;; 3. Print formatted samples if verbose, and check first formatted string
+    (local.set $len (call $format_sample (frame.addr 64) (i32.const 64) $arr))
+    (if (i32.ne $len (i32.const 28))
+      (then (call $free $arr) (return (i32.const -5))))
+    (if (i32.ne (call $strcmp (frame.addr 64) (ref.data $exp_first)) (i32.const 0))
+      (then (call $free $arr) (return (i32.const -6))))
+
+    (if (i32.ne $verbose (i32.const 0))
+      (then
+        (local.set $i (i32.const 0))
+        (block $p_done
+          (loop $p_lp
+            (br_if $p_done (i32.ge_s $i (const $NUM_SAMPLES)))
+            (drop (call $format_sample (frame.addr 64) (i32.const 64)
+                        (ptr.add $arr (i32.mul $i (sizeof $sample)))))
+            (drop (call $puts (frame.addr 64)))
+            (local.set $i (i32.add $i (i32.const 1)))
+            (br $p_lp)))))
+
+    ;; 4. Use `$stdlib:bsearch` with cross-module comparator `(ref.func $cmp_sample_score_asc)`
+    ;;    to find the sample with score = 63.0 (which should be at index 2, id = 1, tag = 101)
+    (field.set $sample $score (frame.addr 0) (f64.const 63.0))
+    (local.set $found
+      (call $bsearch (frame.addr 0) $arr (const $NUM_SAMPLES) (sizeof $sample)
+            (ref.func $cmp_sample_score_asc)))
+    (if (ptr.eqz $found)
+      (then (call $free $arr) (return (i32.const -7))))
+    (if (i32.ne (field.get $sample $tag $found) (i32.const 101))
+      (then (call $free $arr) (return (i32.const -8))))
+
+    ;; 5. Call cross-module record-returning `$vec3:cross` on the first two sorted sample positions:
+    ;;    arr[0].pos = (3, 4, 2), arr[1].pos = (3, 4, 4)
+    ;;    cross((3,4,2), (3,4,4)) = (4*4 - 2*4, 2*3 - 3*4, 3*4 - 4*3) = (8.0, -6.0, 0.0)
+    (call $cross (frame.addr 40)
+          (field.addr $sample $pos $arr)
+          (field.addr $sample $pos (ptr.add $arr (sizeof $sample))))
+    (if (i32.ne (i32.trunc_f64_s (field.get $vec3 $x (frame.addr 40))) (i32.const 8))
+      (then (call $free $arr) (return (i32.const -9))))
+    (if (i32.ne (i32.trunc_f64_s (field.get $vec3 $y (frame.addr 40))) (i32.const -6))
+      (then (call $free $arr) (return (i32.const -10))))
+
+    ;; 6. Call cross-module variadic MARV function `$stats:weighted_sum_va` with 4 varargs:
+    ;;    3 * (10 + 20 + 30 + 40) = 300
+    (local.set $va_res
+      (call $weighted_sum_va (i32.const 3)
+            (i32.const 10) (i32.const 20) (i32.const 30) (i32.const 40)))
+    (if (i32.ne $va_res (i32.const 300))
+      (then (call $free $arr) (return (i32.const -11))))
+
+    ;; 7. Check cross-module globals `$vec3:ops_count` (>= 14), `$stats:sorted_runs` (>= 1),
+    ;;    and cross-module data `(ref.data $tag_label)` ("SAMPLE")
+    (if (i32.lt_s (global.get $ops_count) (i32.const 14))
+      (then (call $free $arr) (return (i32.const -12))))
+    (if (i32.lt_s (global.get $sorted_runs) (i32.const 1))
+      (then (call $free $arr) (return (i32.const -13))))
+    (if (i32.ne (i32.load8_u (ref.data $tag_label)) (i32.const 83)) ;; 'S' = 83
+      (then (call $free $arr) (return (i32.const -14))))
+
+    (call $free $arr)
+    (if (i32.ne $verbose (i32.const 0))
+      (then (drop (call $puts (ref.data $pass_line)))))
+    (return (i32.const 4200)))
+
+  (func $main (export "main")
+    (param $argc i32) (param $argv ptr) (result i32)
+    (if (i32.eq (call $run_multimod_suite (i32.const 1)) (i32.const 4200))
+      (then (return (i32.const 0)))
+      (else (return (i32.const 1))))))

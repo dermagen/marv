@@ -1,0 +1,50 @@
+;;; fcntl.mvh — MARV file control options interface
+;;; Constants taken directly from WCPL/WASI `fcntl.h` (zero remapping on .wo).
+;;; Native `lib/fcntl.c` adapts MARV/WASI open flags and fcntl commands to the host OS.
+
+(mvh-include system $errno)
+(mvh-include system $stdlib)
+(mvh-include system $string)
+
+(interface $fcntl
+  (const $O_APPEND    i32 #x00000001)
+  (const $O_DSYNC     i32 #x00000002)
+  (const $O_NONBLOCK  i32 #x00000004)
+  (const $O_RSYNC     i32 #x00000008)
+  (const $O_SYNC      i32 #x00000010)
+  (const $O_CREAT     i32 #x00001000)
+  (const $O_DIRECTORY i32 #x00002000)
+  (const $O_EXCL      i32 #x00004000)
+  (const $O_TRUNC     i32 #x00008000)
+  (const $O_NOFOLLOW  i32 #x01000000)
+  (const $O_EXEC      i32 #x02000000)
+  (const $O_RDONLY    i32 #x04000000)
+  (const $O_SEARCH    i32 #x08000000)
+  (const $O_WRONLY    i32 #x10000000)
+  (const $O_RDWR      i32 #x14000000)
+  (const $O_ACCMODE   i32 #x1e000000)
+
+  (const $POSIX_FADV_NORMAL     i32 0)
+  (const $POSIX_FADV_SEQUENTIAL i32 1)
+  (const $POSIX_FADV_RANDOM     i32 2)
+  (const $POSIX_FADV_WILLNEED   i32 3)
+  (const $POSIX_FADV_DONTNEED   i32 4)
+  (const $POSIX_FADV_NOREUSE    i32 5)
+
+  (const $F_GETFD    i32 1)
+  (const $F_SETFD    i32 2)
+  (const $F_GETFL    i32 3)
+  (const $F_SETFL    i32 4)
+  (const $FD_CLOEXEC i32 1)
+
+  (const $AT_EACCESS          i32 0)
+  (const $AT_SYMLINK_NOFOLLOW i32 1)
+  (const $AT_SYMLINK_FOLLOW   i32 2)
+  (const $AT_REMOVEDIR        i32 4)
+
+  (func $open            (param $path ptr) (param $oflags i32) (result i32))
+  (func $openat          (param $fd i32) (param $path ptr) (param $oflags i32) (result i32))
+  (func $fcntl           (param $fd i32) (param $cmd i32) (param ...) (result i32))
+  (func $posix_fadvise   (param $fd i32) (param $offset i64) (param $len i64) (param $advice i32) (result i32))
+  (func $posix_fallocate (param $fd i32) (param $offset i64) (param $len i64) (result i32))
+)

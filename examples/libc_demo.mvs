@@ -1,0 +1,352 @@
+;; =============================================================================
+;; mstd/examples/libc_demo.mvs -- MARV-ABI Standard Library Showcase
+;;
+;; Demonstrates the MARV-native standard library architecture:
+;;   1. No `c-` prefixes (`interface`, `func`, `const`, `record`, `global`, `data`)
+;;      and no `c.call` / `c.callback` / `c.var_get` instructions.
+;;   2. Constants taken directly from WASM/WCPL libraries (no remapping on `.wo`).
+;;   3. Nested module correspondence: `math.vec.mvh` <-> `lib/math/vec.c` and
+;;      `sys.stat.mvh` <-> `lib/sys/stat.c`.
+;;   4. WCPL-style variadic functions (`$ap$ : ptr` to 16-byte `va_arg_t` slots,
+;;      with `ap[-1]` storing `va_count`) for both library calls (`snprintf`)
+;;      and user-defined variadic MARV functions (`va.start`, `va.count`, `va.arg`).
+;;   5. WCPL-style record conventions: `$rp$ : ptr` first parameter for by-value
+;;      record returns (`div`, `lldiv`, `math.vec:cross`) and fixed-layout
+;;      pointer records (`div_t`, `stat`, `vec3`).
+;; =============================================================================
+
+(mvh-include system $stdlib)
+(mvh-include system $stdio)
+(mvh-include system $string)
+(mvh-include system $math)
+(mvh-include system $errno)
+(mvh-include system $ctype)
+(mvh-include system $sys.stat)
+(mvh-include system $math.vec)
+
+(module $libc_demo
+
+  ;; Static read-only strings
+  (data $fmt_msg   const align=1 "%s:%d:%lld:%.2f\x00;")
+  (data $tag_str   const align=1 "MARV\x00;")
+  (data $exp_msg   const align=1 "MARV:42:1234567890123:3.25\x00;")
+  (data $num_str   const align=1 "  -9876543210xyz\x00;")
+  (data $flt_str   const align=1 "6.25\x00;")
+  (data $dot_dir   const align=1 ".\x00;")
+  (data $hello_out const align=1 "\x00;")
+
+  ;; ---------------------------------------------------------------------------
+  ;; 1. Normal MARV Callback: `qsort` and `bsearch` Comparator
+  ;;    Signature: `(param $pa ptr) (param $pb ptr) (result i32)`
+  ;; ---------------------------------------------------------------------------
+  (func $cmp_i32_asc
+    (param $pa ptr) (param $pb ptr)
+    (result i32)
+    (local $a i32) (local $b i32)
+    (local.set $a (i32.load (local.get $pa)))
+    (local.set $b (i32.load (local.get $pb)))
+    (return
+      (i32.sub
+        (i32.gt_s (local.get $a) (local.get $b))
+        (i32.lt_s (local.get $a) (local.get $b)))))
+
+  ;; Test dynamic allocation (`malloc`/`free`) + `qsort` + `bsearch` with MARV comparator
+  ;; Returns: 1000 if all checks pass
+  (func $test_qsort_bsearch (export "test_qsort_bsearch")
+    (result i32)
+    (frame 16)
+    (local $arr ptr)
+    (local $found ptr)
+    (local $missing ptr)
+    (local $ok i32)
+
+    (local.set $arr (call $malloc (i32.const 32)))
+    (if (ptr.eqz (local.get $arr))
+      (then (return (i32.const -1))))
+
+    ;; Populate unsorted i32 values: [42, -7, 19, 108, 3, 99, -25, 42]
+    (i32.store offset=0  (local.get $arr) (i32.const 42))
+    (i32.store offset=4  (local.get $arr) (i32.const -7))
+    (i32.store offset=8  (local.get $arr) (i32.const 19))
+    (i32.store offset=12 (local.get $arr) (i32.const 108))
+    (i32.store offset=16 (local.get $arr) (i32.const 3))
+    (i32.store offset=20 (local.get $arr) (i32.const 99))
+    (i32.store offset=24 (local.get $arr) (i32.const -25))
+    (i32.store offset=28 (local.get $arr) (i32.const 42))
+
+    ;; Sort via `qsort` passing `(ref.func $cmp_i32_asc)` directly!
+    (call $qsort
+      (local.get $arr)
+      (i32.const 8)
+      (i32.const 4)
+      (ref.func $cmp_i32_asc))
+
+    ;; Verify sorted elements: [-25, -7, 3, 19, 42, 42, 99, 108]
+    (local.set $ok (i32.const 1))
+    (if (i32.ne (i32.load offset=0  (local.get $arr)) (i32.const -25)) (then (local.set $ok (i32.const 0))))
+    (if (i32.ne (i32.load offset=4  (local.get $arr)) (i32.const -7))  (then (local.set $ok (i32.const 0))))
+    (if (i32.ne (i32.load offset=8  (local.get $arr)) (i32.const 3))   (then (local.set $ok (i32.const 0))))
+    (if (i32.ne (i32.load offset=12 (local.get $arr)) (i32.const 19))  (then (local.set $ok (i32.const 0))))
+    (if (i32.ne (i32.load offset=16 (local.get $arr)) (i32.const 42))  (then (local.set $ok (i32.const 0))))
+    (if (i32.ne (i32.load offset=20 (local.get $arr)) (i32.const 42))  (then (local.set $ok (i32.const 0))))
+    (if (i32.ne (i32.load offset=24 (local.get $arr)) (i32.const 99))  (then (local.set $ok (i32.const 0))))
+    (if (i32.ne (i32.load offset=28 (local.get $arr)) (i32.const 108)) (then (local.set $ok (i32.const 0))))
+
+    ;; Search for key = 99 via `bsearch`
+    (i32.store (frame.addr 0) (i32.const 99))
+    (local.set $found
+      (call $bsearch
+        (frame.addr 0)
+        (local.get $arr)
+        (i32.const 8)
+        (i32.const 4)
+        (ref.func $cmp_i32_asc)))
+
+    (if (ptr.eqz (local.get $found))
+      (then (local.set $ok (i32.const 0)))
+      (else
+        (if (i32.ne (ptr.diff (local.get $found) (local.get $arr)) (i32.const 24))
+          (then (local.set $ok (i32.const 0))))))
+
+    ;; Search for absent key = 55 via `bsearch`
+    (i32.store (frame.addr 0) (i32.const 55))
+    (local.set $missing
+      (call $bsearch
+        (frame.addr 0)
+        (local.get $arr)
+        (i32.const 8)
+        (i32.const 4)
+        (ref.func $cmp_i32_asc)))
+    (if (i32.eqz (ptr.eqz (local.get $missing)))
+      (then (local.set $ok (i32.const 0))))
+
+    (call $free (local.get $arr))
+    (return (select (i32.const 1000) (i32.const -2) (local.get $ok))))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 2. User-Defined Variadic MARV Function (`va.start`, `va.count`, `va.arg`)
+  ;;    Computes `scale * sum(va_0, ..., va_{n-1})`
+  ;; ---------------------------------------------------------------------------
+  (func $sum_scaled_va
+    (param $scale i32) (param ...)
+    (result i32)
+    (local $ap ptr)
+    (local $cnt i32)
+    (local $i i32)
+    (local $acc i32)
+
+    (local.set $ap  (va.start))
+    (local.set $cnt (va.count))
+    (local.set $i   (i32.const 0))
+    (local.set $acc (i32.const 0))
+
+    (block $done
+      (loop $lp
+        (br_if $done (i32.ge_s (local.get $i) (local.get $cnt)))
+        (local.set $acc (i32.add (local.get $acc) (va.arg $ap i32)))
+        (local.set $i   (i32.add (local.get $i) (i32.const 1)))
+        (br $lp)))
+
+    (return (i32.mul (local.get $scale) (local.get $acc))))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 3. Variadic `snprintf` (`ptr`, `i32`, `i64`, `f64`) + User Variadic Call
+  ;;    Returns: 2600 + 427 = 3027
+  ;; ---------------------------------------------------------------------------
+  (func $test_snprintf_varargs (export "test_snprintf_varargs")
+    (result i32)
+    (frame 64) ;; 64-byte output buffer at frame[0..63]
+    (local $n i32)
+    (local $len i32)
+    (local $cmp i32)
+    (local $vsum i32)
+
+    ;; Format "MARV:42:1234567890123:3.25" (26 chars) into frame[0..63]
+    ;; Notice: no `(varargs ...)` wrapper needed -- MARV packs trailing varargs
+    ;; into 16-byte `va_arg_t` slots automatically!
+    (local.set $n
+      (call $snprintf
+        (frame.addr 0)
+        (i32.const 64)
+        (ref.data $fmt_msg)
+        (ref.data $tag_str)
+        (i32.const 42)
+        (i64.const 1234567890123)
+        (f64.const 3.25)))
+
+    (local.set $len (call $strlen (frame.addr 0)))
+    (local.set $cmp (call $memcmp (frame.addr 0) (ref.data $exp_msg) (i32.const 27)))
+
+    ;; Also test user-defined variadic MARV function:
+    ;; 7 * (10 + 20 + 31) = 7 * 61 = 427
+    (local.set $vsum
+      (call $sum_scaled_va
+        (i32.const 7)
+        (i32.const 10)
+        (i32.const 20)
+        (i32.const 31)))
+
+    (if (i32.and
+          (i32.eq (local.get $vsum) (i32.const 427))
+          (i32.and
+            (i32.eq (local.get $n) (i32.const 26))
+            (i32.and
+              (i32.eq (local.get $len) (i32.const 26))
+              (i32.eq (local.get $cmp) (i32.const 0)))))
+      (then (return (i32.add (i32.const 2600) (local.get $vsum))))
+      (else (return (i32.const -3)))))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 4. Records & `rp$` Returns (`div` / `div_t`, `math.vec:cross` / `vec3`,
+  ;;    and `sys.stat:stat` / `stat`)
+  ;;    Returns: 3418
+  ;; ---------------------------------------------------------------------------
+  (func $test_records_and_nested_mod (export "test_records_and_nested_mod")
+    (result i32)
+    (frame 192)
+    ;; frame[0..7]    = div_t (8B)
+    ;; frame[16..39]  = vec3 a (24B)
+    ;; frame[40..63]  = vec3 b (24B)
+    ;; frame[64..87]  = vec3 c = cross(a, b) (24B)
+    ;; frame[96..175] = struct stat (80B)
+    (local $q i32)
+    (local $r i32)
+    (local $sz i32)
+    (local $dp f64)
+    (local $nm f64)
+    (local $mode i32)
+
+    ;; 1000 / 43 => quot = 23, rem = 11 (via `rp$` first argument!)
+    (call $div (frame.addr 0) (i32.const 1000) (i32.const 43))
+    (local.set $q (field.get $div_t $quot (frame.addr 0)))
+    (local.set $r (field.get $div_t $rem  (frame.addr 0)))
+
+    ;; Test `field.set` and `sizeof`
+    (field.set $div_t $quot (frame.addr 0) (i32.add (local.get $q) (i32.const 10)))
+    (local.set $q  (field.get $div_t $quot (frame.addr 0))) ;; 33
+    (local.set $sz (sizeof $div_t))                         ;; 8
+
+    ;; Test nested module `math.vec` (`include/math.vec.mvh` <-> `lib/math/vec.c`):
+    ;; a = (1.0, 2.0, 2.0), b = (2.0, 1.0, -2.0)
+    ;; dot(a, b) = 2 + 2 - 4 = 0.0
+    ;; norm(a)   = sqrt(1 + 4 + 4) = 3.0
+    ;; cross(a, b) = (-6.0, 6.0, -3.0), norm(cross(a, b)) = sqrt(36 + 36 + 9) = 9.0
+    (field.set $vec3 $x (frame.addr 16) (f64.const 1.0))
+    (field.set $vec3 $y (frame.addr 16) (f64.const 2.0))
+    (field.set $vec3 $z (frame.addr 16) (f64.const 2.0))
+
+    (field.set $vec3 $x (frame.addr 40) (f64.const 2.0))
+    (field.set $vec3 $y (frame.addr 40) (f64.const 1.0))
+    (field.set $vec3 $z (frame.addr 40) (f64.const -2.0))
+
+    (local.set $dp (call $dot (frame.addr 16) (frame.addr 40)))
+    (call $cross (frame.addr 64) (frame.addr 16) (frame.addr 40))
+    (local.set $nm (call $norm (frame.addr 64)))
+
+    (if (i32.or (f64.ne (local.get $dp) (f64.const 0.0))
+                (i32.or (f64.ne (field.get $vec3 $x (frame.addr 64)) (f64.const -6.0))
+                        (f64.ne (local.get $nm) (f64.const 9.0))))
+      (then (return (i32.const -40)))
+      (else))
+
+    ;; Test `sys.stat` (`include/sys.stat.mvh` <-> `lib/sys/stat.c`) on "."
+    (if (i32.ne (call $stat (ref.data $dot_dir) (frame.addr 96)) (i32.const 0))
+      (then (return (i32.const -41)))
+      (else))
+    (local.set $mode (field.get $stat $st_mode (frame.addr 96)))
+    (if (i32.ne (i32.and (local.get $mode) (const $S_IFMT)) (const $S_IFDIR))
+      (then (return (i32.const -42)))
+      (else))
+
+    ;; 33 * 100 + 11 * 10 + 8 = 3418
+    (return
+      (i32.add
+        (i32.add (i32.mul (local.get $q) (i32.const 100))
+                 (i32.mul (local.get $r) (i32.const 10)))
+        (local.get $sz))))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 5. Conversions (`strtoll`, `strtod`), Math (`sqrt`), CType (`toupper`,
+  ;;    `isdigit`), `errno` (`$errno:errno`), and `$stdout` (`$stdio:_iob + 32`)
+  ;; ---------------------------------------------------------------------------
+  (func $test_libc_misc (export "test_libc_misc")
+    (result i32)
+    (frame 16)
+    (local $val i64)
+    (local $endp ptr)
+    (local $tail_ch i32)
+    (local $up_ch i32)
+    (local $is_d i32)
+    (local $d f64)
+    (local $sq f64)
+    (local $err i32)
+
+    ;; Test global `$errno:errno` + WCPL/WASI constant `$EDOM` (18)
+    (global.set $errno (const $EDOM))
+    (local.set $err (global.get $errno))
+    (global.set $errno (i32.const 0))
+
+    ;; Parse "  -9876543210xyz" -> val = -9876543210, *endptr points to "xyz" ('x' = 120)
+    (ptr.store (frame.addr 0) (ptr.null))
+    (local.set $val
+      (call $strtoll
+        (ref.data $num_str)
+        (frame.addr 0)
+        (i32.const 10)))
+    (local.set $endp (ptr.load (frame.addr 0)))
+    (local.set $tail_ch (i32.load8_u (local.get $endp)))
+
+    ;; Test `ctype`: toupper('x' = 120) -> 'X' (88), isdigit('5' = 53) -> non-zero
+    (local.set $up_ch (call $toupper (local.get $tail_ch)))
+    (local.set $is_d  (call $isdigit (i32.const 53)))
+
+    ;; Parse "6.25" -> 6.25, sqrt(6.25) -> 2.5
+    (local.set $d  (call $strtod (ref.data $flt_str) (ptr.null)))
+    (local.set $sq (call $sqrt (local.get $d)))
+
+    ;; Test standard stream handle `(const $stdout)` with `fputs` and `fflush`
+    (drop (call $fputs (ref.data $hello_out) (const $stdout)))
+    (drop (call $fflush (const $stdout)))
+
+    (if (i32.and
+          (i32.and
+            (i32.eq (local.get $err) (const $EDOM))
+            (i32.and
+              (i32.gt_s (const $ERANGE) (i32.const 0))
+              (i32.eq (const $EOF) (i32.const -1))))
+          (i32.and
+            (i64.eq (local.get $val) (i64.const -9876543210))
+            (i32.and
+              (i32.and
+                (i32.eq (local.get $tail_ch) (i32.const 120))
+                (i32.and
+                  (i32.eq (local.get $up_ch) (i32.const 88))
+                  (i32.ne (local.get $is_d) (i32.const 0))))
+              (f64.eq (local.get $sq) (f64.const 2.5)))))
+      (then (return (i32.const 500)))
+      (else (return (i32.const -5)))))
+
+  ;; ---------------------------------------------------------------------------
+  ;; 6. Master Entry Point (`run_all_mstd_tests` and `main`)
+  ;; ---------------------------------------------------------------------------
+  (func $run_all_mstd_tests (export "run_all_mstd_tests")
+    (result i32)
+    ;; 1000 + 3027 + 3418 + 500 = 7945
+    (return
+      (i32.add
+        (call $test_qsort_bsearch)
+        (i32.add
+          (call $test_snprintf_varargs)
+          (i32.add
+            (call $test_records_and_nested_mod)
+            (call $test_libc_misc))))))
+
+  (func $main (export "main")
+    (param $argc i32) (param $argv ptr)
+    (result i32)
+    (return
+      (select
+        (i32.const 0)
+        (i32.const 1)
+        (i32.eq (call $run_all_mstd_tests) (i32.const 7945)))))
+)

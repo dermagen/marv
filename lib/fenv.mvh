@@ -1,0 +1,22 @@
+;;; fenv.mvh — MARV floating-point environment interface
+;;; Matches WCPL `fenv.wo` and native `lib/fenv.c`.
+
+(interface $fenv
+  (const $FE_ALL_EXCEPT i32 0)
+  (const $FE_TONEAREST  i32 0)
+
+  (record $fenv_t
+    (field $__cw i32))
+
+  (func $feclearexcept   (param $excepts i32))
+  (func $fegetexceptflag (param $flagp ptr) (param $excepts i32))
+  (func $feraiseexcept   (param $excepts i32))
+  (func $fesetexceptflag (param $flagp ptr) (param $excepts i32))
+  (func $fetestexcept    (param $excepts i32) (result i32))
+  (func $fegetround      (result i32))
+  (func $fesetround      (param $round i32) (result i32))
+  (func $fegetenv        (param $envp ptr))
+  (func $feholdexcept    (param $envp ptr) (result i32))
+  (func $fesetenv        (param $envp ptr))
+  (func $feupdateenv     (param $envp ptr))
+)

@@ -1,0 +1,21 @@
+;; =============================================================================
+;; mstd/examples/multimod/vec3.mvh -- Interface for MARV Module 1 (`$vec3`)
+;; =============================================================================
+
+(interface $vec3
+  (const $VEC3_SCALE f64 2.0)
+
+  (record $vec3
+    (field $x f64)
+    (field $y f64)
+    (field $z f64))
+
+  ;; Exported mutable counter of vector operations performed
+  (global $ops_count (mut i32))
+
+  ;; Record-returning (`$rp$`) and scalar functions
+  (func $make   (param $x f64) (param $y f64) (param $z f64) (result (record $vec3)))
+  (func $add    (param $a ptr) (param $b ptr) (result (record $vec3)))
+  (func $cross  (param $a ptr) (param $b ptr) (result (record $vec3)))
+  (func $dot    (param $a ptr) (param $b ptr) (result f64))
+  (func $length (param $v ptr) (result f64)))

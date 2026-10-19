@@ -1,0 +1,68 @@
+;; =============================================================================
+;; mstd/examples/multimod/vec3.mvs -- Implementation of MARV Module 1 (`$vec3`)
+;; Includes its own `.mvh` interface (`vec3.mvh`) plus system `$math`.
+;; =============================================================================
+
+(mvh-include $vec3)
+(mvh-include system $math)
+
+(module $vec3
+
+  (global $ops_count (export "ops_count") (mut i32) (i32.const 0))
+
+  ;; Construct a `$vec3` in caller-supplied destination `$rp$`
+  (func $make (export "make")
+    (param $x f64) (param $y f64) (param $z f64) (result (record $vec3))
+    (global.set $ops_count (i32.add (global.get $ops_count) (i32.const 1)))
+    (field.set $vec3 $x $rp$ $x)
+    (field.set $vec3 $y $rp$ $y)
+    (field.set $vec3 $z $rp$ $z)
+    (return))
+
+  ;; Component-wise vector addition into `$rp$`
+  (func $add (export "add")
+    (param $a ptr) (param $b ptr) (result (record $vec3))
+    (global.set $ops_count (i32.add (global.get $ops_count) (i32.const 1)))
+    (field.set $vec3 $x $rp$
+      (f64.add (field.get $vec3 $x $a) (field.get $vec3 $x $b)))
+    (field.set $vec3 $y $rp$
+      (f64.add (field.get $vec3 $y $a) (field.get $vec3 $y $b)))
+    (field.set $vec3 $z $rp$
+      (f64.add (field.get $vec3 $z $a) (field.get $vec3 $z $b)))
+    (return))
+
+  ;; 3D cross product into `$rp$` (safe when `$rp$` aliases neither `$a` nor `$b`)
+  (func $cross (export "cross")
+    (param $a ptr) (param $b ptr) (result (record $vec3))
+    (local $ax f64) (local $ay f64) (local $az f64)
+    (local $bx f64) (local $by f64) (local $bz f64)
+    (global.set $ops_count (i32.add (global.get $ops_count) (i32.const 1)))
+    (local.set $ax (field.get $vec3 $x $a))
+    (local.set $ay (field.get $vec3 $y $a))
+    (local.set $az (field.get $vec3 $z $a))
+    (local.set $bx (field.get $vec3 $x $b))
+    (local.set $by (field.get $vec3 $y $b))
+    (local.set $bz (field.get $vec3 $z $b))
+    (field.set $vec3 $x $rp$
+      (f64.sub (f64.mul $ay $bz) (f64.mul $az $by)))
+    (field.set $vec3 $y $rp$
+      (f64.sub (f64.mul $az $bx) (f64.mul $ax $bz)))
+    (field.set $vec3 $z $rp$
+      (f64.sub (f64.mul $ax $by) (f64.mul $ay $bx)))
+    (return))
+
+  ;; 3D dot product
+  (func $dot (export "dot")
+    (param $a ptr) (param $b ptr) (result f64)
+    (global.set $ops_count (i32.add (global.get $ops_count) (i32.const 1)))
+    (return
+      (f64.add
+        (f64.mul (field.get $vec3 $x $a) (field.get $vec3 $x $b))
+        (f64.add
+          (f64.mul (field.get $vec3 $y $a) (field.get $vec3 $y $b))
+          (f64.mul (field.get $vec3 $z $a) (field.get $vec3 $z $b))))))
+
+  ;; Euclidean norm using intra-module `$dot` and system `$math:sqrt`
+  (func $length (export "length")
+    (param $v ptr) (result f64)
+    (return (call $sqrt (call $dot $v $v)))))
