@@ -1,0 +1,14 @@
+;; =============================================================================
+;; cl.mvt -- MARV Target Description for Windows MSVC (`cl`)
+;; Assumes `cl` is installed and in PATH (Developer Command Prompt for VS).
+;; =============================================================================
+
+(marv-target
+  (name     "cl")
+  (type     cc)
+  (obj-ext  ".c")
+  (cc       "cl")
+  (cflags   ("/nologo" "/O2"))
+  (ldflags  ())
+  (ldlibs   ())
+  (link-cmd "cl /nologo /O2 /Fe:~exe ~src"))

@@ -1,0 +1,14 @@
+;; =============================================================================
+;; wcpl.mvt -- MARV Target Description for WCPL (WebAssembly .wo / .wasm)
+;; Assumes `wcpl` is installed and in PATH.
+;; =============================================================================
+
+(marv-target
+  (name     "wcpl")
+  (type     wcpl)
+  (obj-ext  ".wo")
+  (cc       "wcpl")
+  (cflags   ())
+  (ldflags  ())
+  (ldlibs   ())
+  (link-cmd "wcpl -o ~exe ~src"))

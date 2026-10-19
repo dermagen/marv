@@ -5232,16 +5232,25 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
   (let* ((fname (if (marv-has-suffix? targdes ".mvt")
                     targdes
                     (string-append targdes ".mvt")))
-         (dirs (append *mstd-target-dirs* '("target/"))))
+         (dirs (append *mstd-target-dirs* '("target/" "targets/"))))
     (if (file-exists? fname)
         fname
         (let loop ((ds dirs))
           (if (null? ds)
               (error "cannot find target description (.mvt) file" fname *mstd-target-dirs*)
-              (let ((p (marv-join-path (car ds) fname)))
-                (if (file-exists? p)
-                    p
-                    (loop (cdr ds)))))))))
+              (let* ((d (car ds))
+                     (p (marv-join-path d fname))
+                     (p-alt (if (marv-has-suffix? d "target")
+                                (marv-join-path (string-append d "s") fname)
+                                (if (marv-has-suffix? d "target/")
+                                    (marv-join-path
+                                      (string-append (substring d 0 (- (string-length d) 1)) "s/")
+                                      fname)
+                                    #f))))
+                (cond
+                  ((file-exists? p) p)
+                  ((and p-alt (file-exists? p-alt)) p-alt)
+                  (else (loop (cdr ds))))))))))
 
 (define (mvt-assq-val key alist default)
   (let ((e (assq key alist)))

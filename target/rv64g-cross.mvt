@@ -1,0 +1,14 @@
+;; =============================================================================
+;; rv64g-cross.mvt -- MARV Target Description for Cross-Compiling to RV64G Linux
+;; Assumes `riscv64-linux-gnu-gcc` is installed and in PATH.
+;; =============================================================================
+
+(marv-target
+  (name     "rv64g-cross")
+  (type     rv64g)
+  (obj-ext  ".s")
+  (cc       "riscv64-linux-gnu-gcc")
+  (cflags   ("-O2" "-D_DEFAULT_SOURCE" "-D_XOPEN_SOURCE=700"))
+  (ldflags  ())
+  (ldlibs   ("-lm"))
+  (link-cmd "riscv64-linux-gnu-gcc -O2 -D_DEFAULT_SOURCE -D_XOPEN_SOURCE=700 ~src -o ~exe -lm"))

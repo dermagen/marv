@@ -1,0 +1,14 @@
+;; =============================================================================
+;; rv64g.mvt -- MARV Target Description for RISC-V 64-bit LP64D (RV64G)
+;; Assumes native RISC-V 64-bit `cc` is installed and in PATH.
+;; =============================================================================
+
+(marv-target
+  (name     "rv64g")
+  (type     rv64g)
+  (obj-ext  ".s")
+  (cc       "cc")
+  (cflags   ("-O2" "-D_DEFAULT_SOURCE" "-D_XOPEN_SOURCE=700"))
+  (ldflags  ())
+  (ldlibs   ("-lm"))
+  (link-cmd "cc -O2 -D_DEFAULT_SOURCE -D_XOPEN_SOURCE=700 ~src -o ~exe -lm"))

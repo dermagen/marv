@@ -1,0 +1,15 @@
+;; =============================================================================
+;; clang.mvt -- MARV Target Description for Restricted C99 (Clang)
+;; Assumes `clang` is installed and in PATH.
+;; =============================================================================
+
+(marv-target
+  (name     "clang")
+  (type     cc)
+  (obj-ext  ".c")
+  (cc       "clang")
+  (cflags   ("-std=c99" "-O2" "-D_DEFAULT_SOURCE" "-D_XOPEN_SOURCE=700"
+             "-Wno-unused-variable" "-Wno-unused-function" "-Wno-unused-label" "-Wno-main"))
+  (ldflags  ())
+  (ldlibs   ("-lm"))
+  (link-cmd "clang -std=c99 -O2 -D_DEFAULT_SOURCE -D_XOPEN_SOURCE=700 -Wno-unused-variable -Wno-unused-function -Wno-unused-label -Wno-main ~src -o ~exe -lm"))

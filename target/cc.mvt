@@ -1,0 +1,15 @@
+;; =============================================================================
+;; cc.mvt -- MARV Target Description for Restricted C99 (System `cc`)
+;; Assumes `cc` is installed and in PATH.
+;; =============================================================================
+
+(marv-target
+  (name     "cc")
+  (type     cc)
+  (obj-ext  ".c")
+  (cc       "cc")
+  (cflags   ("-std=c99" "-O2" "-D_DEFAULT_SOURCE" "-D_XOPEN_SOURCE=700"
+             "-Wno-unused-variable" "-Wno-unused-function" "-Wno-unused-label" "-Wno-main"))
+  (ldflags  ())
+  (ldlibs   ("-lm"))
+  (link-cmd "cc -std=c99 -O2 -D_DEFAULT_SOURCE -D_XOPEN_SOURCE=700 -Wno-unused-variable -Wno-unused-function -Wno-unused-label -Wno-main ~src -o ~exe -lm"))

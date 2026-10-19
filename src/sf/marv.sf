@@ -135,7 +135,7 @@
             (loop (cdr optmap) (cdr optlens))))))
     (+ 2 max-optlen 4)))
 
-(define-inline (marv-host-os)
+(define (marv-host-os)
   (%prim* "{ /* marv-host-os */
 #if defined(_WIN32)
     $return obj(hpushstr($live, newstring(\"win32\")));
@@ -274,7 +274,7 @@
   (flonum->f64-hex-literal x))
 
 ;; Exact IEEE-754 unsigned decimal string representation of f64 / f32 bits (for RV64G asm)
-(define-inline (f64-ieee-str x)
+(define (f64-ieee-str x)
   (%prim* "{ /* f64-ieee-str */
     char buf[32]; obj x = obj_from_$arg;
     double d = is_fixnum_obj(x) ? (double)fixnum_from_obj(x) : (double)flonum_from_obj(x);
@@ -283,7 +283,7 @@
     sprintf(buf, \"%llu\", (unsigned long long)u);
     $return obj(hpushstr($live, newstring(buf))); }" x))
 
-(define-inline (f32-ieee-str x)
+(define (f32-ieee-str x)
   (%prim* "{ /* f32-ieee-str */
     char buf[32]; obj x = obj_from_$arg;
     float f = (float)(is_fixnum_obj(x) ? (double)fixnum_from_obj(x) : (double)flonum_from_obj(x));
@@ -292,14 +292,14 @@
     sprintf(buf, \"%u\", (unsigned int)u);
     $return obj(hpushstr($live, newstring(buf))); }" x))
 
-(define-inline (int64-byte-ref x i)
+(define (int64-byte-ref x i)
   (%prim "{ /* int64-byte-ref */
     obj x = obj_from_$arg; int sh = (int)fixnum_from_$arg * 8;
     int64_t s = is_fixnum_obj(x) ? (int64_t)fixnum_from_obj(x) : (int64_t)flonum_from_obj(x);
     uint64_t u = (uint64_t)s;
     $return fixnum((fixnum_t)((u >> sh) & 0xffU)); }" x i))
 
-(define-inline (f64-byte-ref x i)
+(define (f64-byte-ref x i)
   (%prim "{ /* f64-byte-ref */
     obj x = obj_from_$arg; int sh = (int)fixnum_from_$arg * 8;
     double d = is_fixnum_obj(x) ? (double)fixnum_from_obj(x) : (double)flonum_from_obj(x);
@@ -307,7 +307,7 @@
     if (is_nan(d)) u = 0x7ff8000000000000ULL;
     $return fixnum((fixnum_t)((u >> sh) & 0xffU)); }" x i))
 
-(define-inline (f32-byte-ref x i)
+(define (f32-byte-ref x i)
   (%prim "{ /* f32-byte-ref */
     obj x = obj_from_$arg; int sh = (int)fixnum_from_$arg * 8;
     float f = (float)(is_fixnum_obj(x) ? (double)fixnum_from_obj(x) : (double)flonum_from_obj(x));
@@ -352,7 +352,7 @@
     if (FIXNUM_MIN <= s64 && s64 <= FIXNUM_MAX) $return obj(obj_from_fixnum((fixnum_t)s64));
     else $return obj(obj_from_flonum($live, (flonum_t)s64)); }" v))
 
-(define-inline (int64->string x)
+(define (int64->string x)
   (%prim* "{ /* int64->string */
     char buf[32]; obj x = obj_from_$arg;
     long long v = is_fixnum_obj(x) ? (long long)fixnum_from_obj(x) : (long long)flonum_from_obj(x);
@@ -5351,16 +5351,25 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
   (let* ((fname (if (marv-has-suffix? targdes ".mvt")
                     targdes
                     (string-append targdes ".mvt")))
-         (dirs (append *mstd-target-dirs* '("target/"))))
+         (dirs (append *mstd-target-dirs* '("target/" "targets/"))))
     (if (file-exists? fname)
         fname
         (let loop ((ds dirs))
           (if (null? ds)
               (error "cannot find target description (.mvt) file" fname *mstd-target-dirs*)
-              (let ((p (marv-join-path (car ds) fname)))
-                (if (file-exists? p)
-                    p
-                    (loop (cdr ds)))))))))
+              (let* ((d (car ds))
+                     (p (marv-join-path d fname))
+                     (p-alt (if (marv-has-suffix? d "target")
+                                (marv-join-path (string-append d "s") fname)
+                                (if (marv-has-suffix? d "target/")
+                                    (marv-join-path
+                                      (string-append (substring d 0 (- (string-length d) 1)) "s/")
+                                      fname)
+                                    #f))))
+                (cond
+                  ((file-exists? p) p)
+                  ((and p-alt (file-exists? p-alt)) p-alt)
+                  (else (loop (cdr ds))))))))))
 
 (define (mvt-assq-val key alist default)
   (let ((e (assq key alist)))
