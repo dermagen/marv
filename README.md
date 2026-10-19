@@ -109,6 +109,8 @@ Interface headers (`.mvh`) declare constants, records, functions, globals, and d
   ```
   User-defined variadic functions in MARV read their variadic arguments with `(va.start)`, `(va.count)`, and `(va.arg $ap T)`.
 
+For the complete language specification, instruction set reference, calling conventions, and library adapter guide, see [`doc/README.md`](doc/README.md).
+
 ---
 
 ## Building & Installation
@@ -170,6 +172,7 @@ skint -p src/skint/marv.scm -T target -L lib -t cc -o queens examples/queens.mvs
 
 - `marv.c` — Standalone C source of the MARV compiler & linker driver (compiled from `src/sf/` by `#F`).
 - `Makefile` — Build and installation rules for Unix-like systems.
+- [`doc/`](doc/README.md) — Complete MARV technical specification, instruction reference, calling conventions, and `lib/` adapter authoring guide.
 - [`src/`](src/README.md) — Compiler source code (`src/sf/` `#F` source, `src/skint/marv.scm` R7RS Scheme source) and CLI reference.
 - [`lib/`](lib/README.md) — Standard library `.mvh` headers and single-source `.c` adapters (`lib/*.mvh`, `lib/*.c`).
 - [`target/`](target/README.md) — Target description files (`target/*.mvt`) for `wcpl`, `cc`, `gcc`, `clang`, `cl`, and `rv64g`.

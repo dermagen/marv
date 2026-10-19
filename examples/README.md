@@ -2,6 +2,8 @@
 
 This directory contains single-module and multi-module example programs written in MARV (`.mvs` source files and `.mvh` interface headers).
 
+> **Precondition:** All command lines below assume that the `marv` compiler binary has been built from `marv.c` and installed in your `PATH` (for example via `make && sudo make install`; see the top-level [`README.md`](../README.md)).
+
 ## Overview of Examples
 
 | Path | Description |
@@ -15,30 +17,30 @@ This directory contains single-module and multi-module example programs written 
 
 ## Building and Running the Examples
 
-Run all commands from the repository root (`github/`):
+Run all commands from the repository root:
 
 ### 1. Eight Queens (`examples/queens.mvs`)
 
 ```sh
 # Compile and link to a native executable (CC target)
-skint -p src/skint/marv.scm -T target -t cc -o queens examples/queens.mvs
+marv -T target -t cc -o queens examples/queens.mvs
 ./queens
 
 # Compile and link to a WebAssembly executable (WCPL target)
-skint -p src/skint/marv.scm -T target -t wcpl -o queens.wasm examples/queens.mvs
+marv -T target -t wcpl -o queens.wasm examples/queens.mvs
 ```
 
 ### 2. Directory Traversal (`examples/dirent_demo.mvs`)
 
 ```sh
-skint -p src/skint/marv.scm -T target -t cc -o dirent_demo examples/dirent_demo.mvs
+marv -T target -t cc -o dirent_demo examples/dirent_demo.mvs
 (cd examples/sample_dir && ../../dirent_demo)
 ```
 
 ### 3. Standard Library Tour (`examples/libc_demo.mvs`)
 
 ```sh
-skint -p src/skint/marv.scm -T target -t cc -o libc_demo examples/libc_demo.mvs
+marv -T target -t cc -o libc_demo examples/libc_demo.mvs
 (cd examples/sample_dir && ../../libc_demo)
 ```
 
@@ -48,10 +50,10 @@ You can compile and link all three `.mvs` files in a single command, or compile 
 
 ```sh
 # Compile vec3.mvs to an object file (.c for cc, or .wo for wcpl)
-skint -p src/skint/marv.scm -T target -t cc -c examples/multimod/vec3.mvs
+marv -T target -t cc -c examples/multimod/vec3.mvs
 
 # Compile the remaining modules and link everything into an executable
-skint -p src/skint/marv.scm -T target -t cc -o multimod_app \
+marv -T target -t cc -o multimod_app \
   examples/multimod/vec3.c \
   examples/multimod/stats.mvs \
   examples/multimod/app.mvs
