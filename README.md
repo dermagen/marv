@@ -111,10 +111,67 @@ Interface headers (`.mvh`) declare constants, records, functions, globals, and d
 
 ---
 
+## Building & Installation
+
+MARV ships with a self-contained, pre-generated C source file (`marv.c` in the repository root, compiled from `src/sf/` by [#F](https://github.com/false-schemers/sharpF)) that builds with any standard C compiler without external dependencies.
+
+### Unix-like Systems (Linux, macOS, BSD)
+
+Build the `marv` executable using `make`:
+
+```sh
+make
+```
+
+Or compile `marv.c` directly with your C compiler:
+
+```sh
+cc -O2 -o marv marv.c -lm
+```
+
+To install `marv` (along with the standard library in `$(PREFIX)/share/marv/lib` and target descriptions in `$(PREFIX)/share/marv/target`, defaulting to `PREFIX=/usr/local`):
+
+```sh
+sudo make install
+```
+
+You can customize the installation prefix or compiler:
+
+```sh
+make CC=clang PREFIX=$HOME/.local install
+```
+
+### Windows (MSVC / `cl`)
+
+Open a **Developer Command Prompt for Visual Studio** (x64 or x86 Native Tools Command Prompt) in the repository root and compile `marv.c` with `cl`:
+
+```bat
+cl /nologo /O2 /Fe:marv.exe marv.c
+```
+
+To compile and link a MARV program into a native Windows `.exe` using the included `target/cl.mvt` target description:
+
+```bat
+marv.exe -T target -L lib -t cl -o queens.exe examples\queens.mvs
+queens.exe
+```
+
+### Running from R7RS Scheme Source (`skint`)
+
+Alternatively, you can run the R7RS Scheme implementation (`src/skint/marv.scm`) directly using [Skint](https://github.com/false-schemers/skint):
+
+```sh
+skint -p src/skint/marv.scm -T target -L lib -t cc -o queens examples/queens.mvs
+```
+
+---
+
 ## Repository Layout
 
-- [`src/`](src/README.md) — MARV compiler & linker driver (`src/skint/marv.scm`) and CLI reference.
+- `marv.c` — Standalone C source of the MARV compiler & linker driver (compiled from `src/sf/` by `#F`).
+- `Makefile` — Build and installation rules for Unix-like systems.
+- [`src/`](src/README.md) — Compiler source code (`src/sf/` `#F` source, `src/skint/marv.scm` R7RS Scheme source) and CLI reference.
 - [`lib/`](lib/README.md) — Standard library `.mvh` headers and single-source `.c` adapters (`lib/*.mvh`, `lib/*.c`).
-- [`target/`](target/README.md) — Target description files (`target/*.mvt`) for `wcpl`, `cc`, and `rv64g`.
+- [`target/`](target/README.md) — Target description files (`target/*.mvt`) for `wcpl`, `cc`, `gcc`, `clang`, `cl`, and `rv64g`.
 - [`examples/`](examples/README.md) — Single-module and multi-module `.mvs`/`.mvh` example programs.
 - [`test/`](test/README.md) — Unit, RV64G simulator, and end-to-end target test suite.

@@ -1,11 +1,24 @@
 # MARV Compiler Command-Line Interface
 
-The MARV compiler and build driver resides in `src/skint/marv.scm` and runs as a standard R7RS Scheme program on [Skint](https://github.com/false-schemers/skint).
+The MARV compiler and build driver is provided in two forms:
+
+1. **Standalone C Source (`marv.c` / `src/sf/`)** — Compiled by the [#F (`sfc`)](https://github.com/false-schemers/sharpF) Scheme-to-C compiler from `src/sf/libl.sf` and `src/sf/marv.sf`. Compile `marv.c` in the repository root via `make` or directly with a C compiler:
+   ```sh
+   cc -O2 -o marv marv.c -lm
+   ```
+   Or on Windows with MSVC (`cl`):
+   ```bat
+   cl /nologo /O2 /Fe:marv.exe marv.c
+   ```
+2. **R7RS Scheme Source (`src/skint/marv.scm`)** — Runs directly as a standard R7RS Scheme program on [Skint](https://github.com/false-schemers/skint):
+   ```sh
+   skint -p src/skint/marv.scm ...
+   ```
 
 ## Synopsis
 
 ```sh
-skint -p src/skint/marv.scm -t TARGDES [-c] [OPTION]... FILE...
+marv -t TARGDES [-c] [OPTION]... FILE...
 ```
 
 ## Options
@@ -39,12 +52,12 @@ By default, the output file is written to the **same directory** as the input `.
 
 ```sh
 # Generates examples/queens.wo, examples/queens.c, and examples/queens.s
-skint -p src/skint/marv.scm -T target -t wcpl  -c examples/queens.mvs
-skint -p src/skint/marv.scm -T target -t cc    -c examples/queens.mvs
-skint -p src/skint/marv.scm -T target -t rv64g -c examples/queens.mvs
+marv -T target -t wcpl  -c examples/queens.mvs
+marv -T target -t cc    -c examples/queens.mvs
+marv -T target -t rv64g -c examples/queens.mvs
 
 # Override output file path with -o
-skint -p src/skint/marv.scm -T target -t wcpl -c -o /tmp/queens.wo examples/queens.mvs
+marv -T target -t wcpl -c -o /tmp/queens.wo examples/queens.mvs
 ```
 
 ### 2. Compile-and-Link Mode (without `-c`)
@@ -63,11 +76,11 @@ In compile-and-link mode, `marv`:
 
 ```sh
 # Build a native executable from three .mvs modules
-skint -p src/skint/marv.scm -T target -t cc -o app \
+marv -T target -t cc -o app \
   examples/multimod/vec3.mvs examples/multimod/stats.mvs examples/multimod/app.mvs
 
 # Build a WebAssembly (.wasm) binary mixing a pre-compiled .wo object and .mvs sources
-skint -p src/skint/marv.scm -T target -t wcpl -o app.wasm \
+marv -T target -t wcpl -o app.wasm \
   examples/multimod/vec3.wo examples/multimod/stats.mvs examples/multimod/app.mvs
 ```
 

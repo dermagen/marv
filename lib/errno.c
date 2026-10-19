@@ -168,7 +168,73 @@ static_assert(EXDEV == ERRNO_XDEV);
 static_assert(ENOTCAPABLE == ERRNO_NOTCAPABLE);
 
 #else
-#include "marv.h"
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+#include <math.h>
+
+typedef int32_t  marv_i32;
+typedef uint32_t marv_u32;
+typedef int64_t  marv_i64;
+typedef uint64_t marv_u64;
+typedef float    marv_f32;
+typedef double   marv_f64;
+typedef void*    marv_ptr;
+
+#define MARV_NULL ((marv_ptr)0)
+
+typedef union marv_va_arg {
+  marv_i32 va_int;
+  marv_u32 va_uint;
+  marv_i64 va_llong;
+  marv_u64 va_ullong;
+  marv_f64 va_double;
+  uint64_t va_ptr_slot;
+  uint64_t _pad[2];
+} marv_va_arg_t;
+
+#define MARV_VA_COUNT(ap) \
+  (((const marv_va_arg_t *)(uintptr_t)(ap))[-1].va_int)
+
+#define MARV_VA_PTR(slot_ptr) \
+  ((marv_ptr)(uintptr_t)((slot_ptr)->va_ptr_slot))
+
+#if defined(_MSC_VER) && !defined(__cplusplus) && (_MSC_VER < 1900)
+#define inline __inline
+#endif
+
+static inline marv_ptr marv_ptr_load(marv_ptr base, marv_i64 offset) {
+  uint64_t slot = 0;
+  memcpy(&slot, (const uint8_t*)base + offset, 8);
+  return (marv_ptr)(uintptr_t)slot;
+}
+
+static inline void marv_ptr_store(marv_ptr base, marv_i64 offset, marv_ptr val) {
+  uint64_t slot = (uint64_t)(uintptr_t)val;
+  memcpy((uint8_t*)base + offset, &slot, 8);
+}
+
+static inline marv_i64 marv_i64_load(marv_ptr base, marv_i64 off) {
+  marv_i64 v; memcpy(&v, (const uint8_t*)base + off, 8); return v;
+}
+static inline void marv_i32_store(marv_ptr base, marv_i64 off, marv_i32 v) {
+  memcpy((uint8_t*)base + off, &v, 4);
+}
+static inline void marv_i32_store8(marv_ptr base, marv_i64 off, marv_i32 v) {
+  uint8_t b = (uint8_t)v; memcpy((uint8_t*)base + off, &b, 1);
+}
+static inline void marv_i32_store16(marv_ptr base, marv_i64 off, marv_i32 v) {
+  uint16_t h = (uint16_t)v; memcpy((uint8_t*)base + off, &h, 2);
+}
+static inline void marv_i64_store(marv_ptr base, marv_i64 off, marv_i64 v) {
+  memcpy((uint8_t*)base + off, &v, 8);
+}
+static inline void marv_f32_store(marv_ptr base, marv_i64 off, marv_f32 v) {
+  memcpy((uint8_t*)base + off, &v, 4);
+}
+static inline void marv_f64_store(marv_ptr base, marv_i64 off, marv_f64 v) {
+  memcpy((uint8_t*)base + off, &v, 8);
+}
 #include <errno.h>
 
 /* MARV / WCPL / WASI errno constants */
