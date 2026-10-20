@@ -4172,8 +4172,8 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
 ;;     first parameter and the function returns void.
 ;; =============================================================================
 
-(define *mstd-target-dirs* '("./"))
-(define *mstd-system-dirs* '("lib/"))
+(define *mstd-target-dirs* '("target/" "targets/"))
+(define *mstd-system-dirs* '("lib/" "libs/"))
 (define *mstd-local-dirs*  '("./"))
 
 ;; Recorded during the most recent `expand-mvs-forms` call:
@@ -5232,25 +5232,16 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
   (let* ((fname (if (marv-has-suffix? targdes ".mvt")
                     targdes
                     (string-append targdes ".mvt")))
-         (dirs (append *mstd-target-dirs* '("target/" "targets/"))))
+         (dirs *mstd-target-dirs*))
     (if (file-exists? fname)
         fname
         (let loop ((ds dirs))
           (if (null? ds)
               (error "cannot find target description (.mvt) file" fname *mstd-target-dirs*)
-              (let* ((d (car ds))
-                     (p (marv-join-path d fname))
-                     (p-alt (if (marv-has-suffix? d "target")
-                                (marv-join-path (string-append d "s") fname)
-                                (if (marv-has-suffix? d "target/")
-                                    (marv-join-path
-                                      (string-append (substring d 0 (- (string-length d) 1)) "s/")
-                                      fname)
-                                    #f))))
-                (cond
-                  ((file-exists? p) p)
-                  ((and p-alt (file-exists? p-alt)) p-alt)
-                  (else (loop (cdr ds))))))))))
+              (let ((p (marv-join-path (car ds) fname)))
+                (if (file-exists? p)
+                    p
+                    (loop (cdr ds)))))))))
 
 (define (mvt-assq-val key alist default)
   (let ((e (assq key alist)))
@@ -5389,7 +5380,7 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
 
 (define *marv-cli-options*
   '((target  "-t" "--target"      "TARGDES" "Target designation (.mvt name/path, required)")
-    (targdir "-T" "--target-dir"  "DIR"     "Add directory to .mvt lookup path (default: ./)")
+    (targdir "-T" "--target-dir"  "DIR"     "Add directory to .mvt lookup path (default: target/)")
     (compile "-c" "--compile"     #f        "Compile one .mvs file to target object (.wo, .s, .c)")
     (output  "-o" "--output"      "FILE"    "Output file (object with -c; executable without -c)")
     (libdir  "-L" "--system-dir"  "DIR"     "Add directory to system .mvh/.c lookup path (default: lib/)")

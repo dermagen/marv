@@ -119,16 +119,19 @@ MARV ships with a self-contained, pre-generated C source file (`marv.c` in the r
 
 ### Unix-like Systems (Linux, macOS, BSD)
 
-Build the `marv` executable using `make`:
+Optionally run `./configure` to set a custom installation `PREFIX` (defaults to `/usr/local`), then build the `marv` executable using `make`:
 
 ```sh
+./configure --prefix=/usr/local   # optional; defaults to /usr/local
 make
 ```
 
-Or compile `marv.c` directly with your C compiler:
+`Makefile` compiles `marv.c` with `-D PREFIX=$(PREFIX)/share/marv/`, embedding `$(PREFIX)/share/marv/target` and `$(PREFIX)/share/marv/lib` into `marv`'s default target and library search paths alongside local `target/` and `lib/`.
+
+You can also compile `marv.c` directly with your C compiler (with or without `-D PREFIX`):
 
 ```sh
-cc -O2 -o marv marv.c -lm
+cc -O2 -D PREFIX=/usr/local/share/marv/ -o marv marv.c -lm
 ```
 
 To install `marv` (along with the standard library in `$(PREFIX)/share/marv/lib` and target descriptions in `$(PREFIX)/share/marv/target`, defaulting to `PREFIX=/usr/local`):
@@ -137,10 +140,11 @@ To install `marv` (along with the standard library in `$(PREFIX)/share/marv/lib`
 sudo make install
 ```
 
-You can customize the installation prefix or compiler:
+You can customize the installation prefix via `./configure` or `make` variables:
 
 ```sh
-make CC=clang PREFIX=$HOME/.local install
+./configure --prefix=$HOME/.local
+make CC=clang install
 ```
 
 ### Windows (MSVC / `cl`)
@@ -154,7 +158,7 @@ cl /nologo /O2 /Fe:marv.exe marv.c
 To compile and link a MARV program into a native Windows `.exe` using the included `target/cl.mvt` target description:
 
 ```bat
-marv.exe -T target -L lib -t cl -o queens.exe examples\queens.mvs
+marv.exe -t cl -o queens.exe examples\queens.mvs
 queens.exe
 ```
 
@@ -163,7 +167,7 @@ queens.exe
 Alternatively, you can run the R7RS Scheme implementation (`src/skint/marv.scm`) directly using [Skint](https://github.com/false-schemers/skint):
 
 ```sh
-skint -p src/skint/marv.scm -T target -L lib -t cc -o queens examples/queens.mvs
+skint -p src/skint/marv.scm -t cc -o queens examples/queens.mvs
 ```
 
 ---
@@ -171,6 +175,7 @@ skint -p src/skint/marv.scm -T target -L lib -t cc -o queens examples/queens.mvs
 ## Repository Layout
 
 - `marv.c` — Standalone C source of the MARV compiler & linker driver (compiled from `src/sf/` by `#F`).
+- `configure` — Optional configuration script (`./configure --prefix=PATH`) that writes `config.mk`.
 - `Makefile` — Build and installation rules for Unix-like systems.
 - [`doc/`](doc/README.md) — Complete MARV technical specification, instruction reference, calling conventions, and `lib/` adapter authoring guide.
 - [`src/`](src/README.md) — Compiler source code (`src/sf/` `#F` source, `src/skint/marv.scm` R7RS Scheme source) and CLI reference.

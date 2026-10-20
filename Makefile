@@ -1,20 +1,23 @@
 # Makefile for MARV (Unix-like systems)
 
+-include config.mk
+PREFIX  ?= /usr/local
+BINDIR  ?= $(PREFIX)/bin
+DATADIR ?= $(PREFIX)/share/marv
+
 CC      ?= cc
 CFLAGS  ?= -O2
 LDFLAGS ?=
 LDLIBS  ?= -lm
 
-PREFIX  ?= /usr/local
-BINDIR  ?= $(PREFIX)/bin
-DATADIR ?= $(PREFIX)/share/marv
+$(info prefix is set to $(PREFIX))
 
-.PHONY: all test check install uninstall clean
+.PHONY: all test check install uninstall clean realclean distclean
 
 all: marv
 
 marv: marv.c
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ marv.c $(LDLIBS)
+	$(CC) $(CFLAGS) -D PREFIX=$(DATADIR)/ $(LDFLAGS) -o $@ marv.c $(LDLIBS)
 
 test check: marv
 	bash test/run-tests.sh
@@ -34,3 +37,8 @@ uninstall:
 clean:
 	rm -f marv examples/*.c examples/*.wo examples/*.s \
 	      examples/multimod/*.c examples/multimod/*.wo examples/multimod/*.s
+
+realclean: clean
+	rm -f config.mk
+
+distclean: realclean

@@ -65,8 +65,8 @@ echo "  [PASS] Standalone marv binary generated .c, .wo, and .s identical to Ski
 "$MARV_BIN" -T target -t cc -o /tmp/gh_marv_libc   examples/libc_demo.mvs
 "$MARV_BIN" -T target -t cc -o /tmp/gh_marv_queens examples/queens.mvs
 
-(cd examples/sample_dir && /tmp/gh_marv_dirent) > /tmp/gh_marv_dirent_cc.out
-(cd examples/sample_dir && /tmp/gh_marv_libc)
+/tmp/gh_marv_dirent > /tmp/gh_marv_dirent_cc.out
+/tmp/gh_marv_libc
 /tmp/gh_marv_queens > /tmp/gh_marv_queens_cc.out
 echo "  [PASS] Standalone marv compile-and-link mode (-t cc) built and ran all examples!"
 
@@ -103,3 +103,15 @@ EOF
 wcpl -q $WCPL_INC -o /tmp/gh_marv_hexflt.wasm /tmp/gh_marv_hexflt.wo
 test -s /tmp/gh_marv_hexflt.wasm
 echo "  [PASS] SRFI-270 hex float parsing and emission verified across cc, wcpl, and rv64g!"
+
+echo ""
+echo "6. Testing configure --prefix and -D PREFIX installation lookup..."
+mkdir -p /tmp/gh_marv_pfx/share/marv/target /tmp/gh_marv_pfx/share/marv/lib
+cp target/*.mvt /tmp/gh_marv_pfx/share/marv/target/
+cp lib/*.mvh lib/*.c /tmp/gh_marv_pfx/share/marv/lib/
+cc -O2 -D PREFIX=/tmp/gh_marv_pfx/share/marv/ -o /tmp/gh_marv_pfx_bin "$ROOT_DIR/marv.c" -lm
+(cd /tmp && /tmp/gh_marv_pfx_bin -t cc -o /tmp/gh_marv_pfx_queens "$ROOT_DIR/examples/queens.mvs")
+/tmp/gh_marv_pfx_queens > /tmp/gh_marv_pfx_queens.out
+diff -u /tmp/gh_marv_queens_cc.out /tmp/gh_marv_pfx_queens.out
+rm -rf /tmp/gh_marv_pfx
+echo "  [PASS] -D PREFIX target and library lookup verified from out-of-tree directory!"

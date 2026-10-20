@@ -26,10 +26,10 @@ marv -t TARGDES [-c] [OPTION]... FILE...
 | Option | Long Option | Argument | Description |
 |---|---|---|---|
 | `-t` | `--target=TARGDES` | `TARGDES` | **Required.** Target designation name or path mapped to a `.mvt` target description file. |
-| `-T` | `--target-dir=DIR` | `DIR` | Add `DIR` to the `.mvt` target description lookup path (default: `("./")`). |
+| `-T` | `--target-dir=DIR` | `DIR` | Add `DIR` to the `.mvt` target description lookup path (default: `("target/" "<PREFIX>/target")` or `("target/" "targets/")`). |
 | `-c` | `--compile` | *(none)* | Compile one `.mvs` file into a target object file without linking. |
 | `-o` | `--output=FILE` | `FILE` | Output pathname (optional override in `-c` mode; required executable name when `-c` is omitted). |
-| `-L` | `--system-dir=DIR` | `DIR` | Add `DIR` to the system `.mvh` header and `.c` adapter lookup path (default: `("lib/")`). |
+| `-L` | `--system-dir=DIR` | `DIR` | Add `DIR` to the system `.mvh` header and `.c` adapter lookup path (default: `("lib/" "<PREFIX>/lib")` or `("lib/" "libs/")`). |
 | `-I` | `--include-dir=DIR` | `DIR` | Add `DIR` to the project/local `.mvh` header lookup path (default: `("./")`). |
 | `-v` | `--verbose` | *(none)* | Print the underlying target compiler/linker command before executing it. |
 | `-h` | `--help` | *(none)* | Display command-line usage and options. |
@@ -90,6 +90,6 @@ marv -T target -t wcpl -o app.wasm \
 
 `marv` maintains three configurable search path lists:
 
-1. **Target Description Directories (`-T`, default `("./")`)** — Searched when resolving `-t TARGDES` to `<dir>/<TARGDES>.mvt`.
-2. **System Header & Adapter Directories (`-L`, default `("lib/")`)** — Searched when resolving `(mvh-include system $foo.bar)` to `<dir>/foo.bar.mvh` and its companion adapter `<dir>/foo.bar.c`.
+1. **Target Description Directories (`-T`)** — Defaults to `("target/" "<PREFIX>/target")` when `marv.c` is compiled with `-D PREFIX=...` (e.g. `/usr/local/share/marv/` via `Makefile`), or `("target/" "targets/")` if `-D PREFIX` was not given. Searched when resolving `-t TARGDES` to `<dir>/<TARGDES>.mvt` (after checking `<TARGDES>.mvt` directly).
+2. **System Header & Adapter Directories (`-L`)** — Defaults to `("lib/" "<PREFIX>/lib")` when `marv.c` is compiled with `-D PREFIX=...`, or `("lib/" "libs/")` if `-D PREFIX` was not given. Searched when resolving `(mvh-include system $foo.bar)` to `<dir>/foo.bar.mvh` and its companion adapter `<dir>/foo.bar.c`.
 3. **Local Header Directories (`-I`, default `("./")`)** — Searched (after the directory of the including file) when resolving `(mvh-include $foo.bar)` to `<dir>/foo.bar.mvh`.

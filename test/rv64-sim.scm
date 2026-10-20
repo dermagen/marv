@@ -993,7 +993,7 @@
                                              (run next-pc))
                                             (else (nlp (+ i 1)))))))))
 
-                               ;; Simulated `mstd/lib/dirent.c` functions on fixture `sample_dir`
+                               ;; Simulated `lib/dirent.c` functions on `examples/`
                                ;; Canonical WCPL/MARV `struct dirent` layout:
                                ;;   +0: d_ino  (u64)
                                ;;   +8: d_type (u8)
@@ -1011,11 +1011,11 @@
                                 (let* ((dirp a0)
                                        (idx (sim-load-s mem dirp 8))
                                        (ebuf (sim-load-u mem (+ dirp 8) 8))
-                                       (entries '#((101 4 "alpha.txt")
-                                                   (102 4 "beta.mvs")
-                                                   (103 4 "gamma_long.mvs")
-                                                   (104 3 "sub_pkg")
-                                                   (105 4 "z.c"))))
+                                       (entries '#((101 4 "README.md")
+                                                   (102 4 "dirent_demo.mvs")
+                                                   (103 4 "libc_demo.mvs")
+                                                   (104 3 "multimod")
+                                                   (105 4 "queens.mvs"))))
                                   (if (or (< idx 0) (>= idx (vector-length entries)))
                                       (begin
                                         (set-gp! "a0" 0)
@@ -1084,11 +1084,11 @@
                                 (let ((namelist-out a1)
                                       (filter-pc a2)
                                       (compar-pc a3)
-                                      (entries '((105 4 "z.c")
-                                                 (101 4 "alpha.txt")
-                                                 (104 3 "sub_pkg")
-                                                 (103 4 "gamma_long.mvs")
-                                                 (102 4 "beta.mvs")))
+                                      (entries '((105 4 "queens.mvs")
+                                                 (101 4 "README.md")
+                                                 (104 3 "multimod")
+                                                 (103 4 "libc_demo.mvs")
+                                                 (102 4 "dirent_demo.mvs")))
                                       (kept '()))
                                   (for-each
                                     (lambda (item)

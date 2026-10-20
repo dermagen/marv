@@ -199,10 +199,10 @@
                (rv64-call sim "main" '(1 0)) 0)))
 
 ;; 8. Verify CLI lookup directory defaults, .mvt target loading, and system .c adapter resolution
-(assert-eq "Default *mstd-target-dirs* is (\"./\")"
-           *mstd-target-dirs* '("./"))
-(assert-eq "Default *mstd-system-dirs* is (\"lib/\")"
-           *mstd-system-dirs* '("lib/"))
+(assert-eq "Default *mstd-target-dirs* is (\"target/\" \"targets/\")"
+           *mstd-target-dirs* '("target/" "targets/"))
+(assert-eq "Default *mstd-system-dirs* is (\"lib/\" \"libs/\")"
+           *mstd-system-dirs* '("lib/" "libs/"))
 (assert-eq "Default *mstd-local-dirs* is (\"./\")"
            *mstd-local-dirs* '("./"))
 

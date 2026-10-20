@@ -1,10 +1,10 @@
 ;; =============================================================================
-;; mstd/examples/dirent_demo.mvs -- MARV-ABI `dirent` Demonstration
+;; examples/dirent_demo.mvs -- MARV-ABI `dirent` Demonstration
 ;;
-;; Demonstrates calling `mstd/lib/dirent.c` (and WCPL's `dirent` + `stdio` +
+;; Demonstrates calling `lib/dirent.c` (and WCPL's `dirent` + `stdio` +
 ;; `string` modules) directly from MARV using ONLY MARV-ABI interfaces,
 ;; `(record $dirent ...)` field access (`field.get`, `field.addr`), normal MARV
-;; function pointers (`ref.func`), and zero `c-` prefixes or FFI shims!
+;; function pointers (`ref.func`), and zero `c-` prefixes or FFI shims.
 ;; =============================================================================
 
 (mvh-include system $dirent)
@@ -12,19 +12,30 @@
 (mvh-include system $string)
 
 (module $dirent_demo
+  (data $ex_dir     const align=1 "examples\x00;")
   (data $dot_dir    const align=1 ".\x00;")
   (data $hdr_banner const align=1 "=== MARV-Lowered dirent Library Demo ===\x00;")
-  (data $hdr_scan1  const align=1 "1. scandir('.', NULL, alphasort):\x00;")
-  (data $hdr_scan2  const align=1 "2. scandir('.', filter_mvs_or_dir, cmp_by_len_asc):\x00;")
+  (data $hdr_scan1  const align=1 "1. scandir('examples', filter_mvs_or_dir, alphasort):\x00;")
+  (data $hdr_scan2  const align=1 "2. scandir('examples', filter_mvs_or_dir, cmp_by_len_asc):\x00;")
   (data $ftr_pass   const align=1 "=== ALL LOWERED DIRENT CHECKS PASSED ===\x00;")
-  (data $exp_0      const align=1 "alpha.txt\x00;")
-  (data $exp_1      const align=1 "beta.mvs\x00;")
-  (data $exp_2      const align=1 "gamma_long.mvs\x00;")
-  (data $exp_3      const align=1 "sub_pkg\x00;")
-  (data $exp_4      const align=1 "z.c\x00;")
+  (data $exp_dir    const align=1 "multimod\x00;")
+  (data $exp_q      const align=1 "queens.mvs\x00;")
+  (data $exp_l      const align=1 "libc_demo.mvs\x00;")
+  (data $exp_d      const align=1 "dirent_demo.mvs\x00;")
+
+  ;; Return "examples" when running from the repository root, or "." if already inside `examples/`
+  (func $target_dir
+    (result ptr)
+    (local $d ptr)
+    (local.set $d (call $opendir (ref.data $ex_dir)))
+    (if (ptr.eqz $d)
+      (then (return (ref.data $dot_dir)))
+      (else
+        (drop (call $closedir $d))
+        (return (ref.data $ex_dir)))))
 
   ;; Format a single directory entry line into `buf`:
-  ;;   "  [#0] DIR (len=07) sub_pkg" or "  [#1] REG (len=08) beta.mvs"
+  ;;   "  [#0] DIR (len=08) multimod" or "  [#1] REG (len=10) queens.mvs"
   (func $print_entry_line
     (param $idx i32) (param $ent ptr)
     (frame 128)
@@ -154,7 +165,7 @@
     (local $pos i64)
     (local $after_seek i32)
 
-    (local.set $dir (call $opendir (ref.data $dot_dir)))
+    (local.set $dir (call $opendir (call $target_dir)))
     (if (ptr.eqz $dir)
       (then (return (i32.const -1)))
       (else))
@@ -188,19 +199,19 @@
         (local.set $total (i32.add $total (i32.const 1)))
         (br $rd_lp)))
 
-    ;; Expect 4 regular files + 1 directory = 5 entries
-    (if (i32.or (i32.ne $reg_count (i32.const 4))
-                (i32.ne $dir_count (i32.const 1)))
+    ;; Expect at least 4 regular files (`README.md` + 3 `.mvs` files) and 1 directory (`multimod`)
+    (if (i32.or (i32.lt_s $reg_count (i32.const 4))
+                (i32.ne   $dir_count (i32.const 1)))
       (then (return (i32.const -4)))
       (else))
 
-    ;; Verify `telldir` (i64) is 5
+    ;; Verify `telldir` (i64) matches `$total`
     (local.set $pos (call $telldir $dir))
-    (if (i64.ne $pos (i64.const 5))
+    (if (i64.ne $pos (i64.extend_i32_s $total))
       (then (return (i32.const -5)))
       (else))
 
-    ;; Test `seekdir` back to entry #2 (i64) and read remaining 3 entries
+    ;; Test `seekdir` back to entry #2 (i64) and read remaining `total - 2` entries
     (call $seekdir $dir (i64.const 2))
     (if (i64.ne (call $telldir $dir) (i64.const 2))
       (then (return (i32.const -6)))
@@ -213,7 +224,7 @@
         (br_if $eof2 (ptr.eqz $ent))
         (local.set $after_seek (i32.add $after_seek (i32.const 1)))
         (br $rd2)))
-    (if (i32.ne $after_seek (i32.const 3))
+    (if (i32.ne $after_seek (i32.sub $total (i32.const 2)))
       (then (return (i32.const -7)))
       (else))
 
@@ -239,6 +250,7 @@
   (func $test_scandir_ops (export "test_scandir_ops")
     (param $verbose i32) (result i32)
     (frame 32)
+    (local $tdir ptr)
     (local $n i32)
     (local $list ptr)
     (local $i i32)
@@ -247,7 +259,8 @@
     (local $e1 ptr)
     (local $e2 ptr)
     (local $e3 ptr)
-    (local $e4 ptr)
+
+    (local.set $tdir (call $target_dir))
 
     (if (i32.ne $verbose (i32.const 0))
       (then
@@ -255,14 +268,14 @@
         (drop (call $puts (ref.data $hdr_scan1))))
       (else))
 
-    ;; 1. Full alphabetical scan: `scandir(".", &list, NULL, alphasort)`
+    ;; 1. Alphabetical scan: `scandir(tdir, &list, filter_mvs_or_dir, alphasort)`
     (local.set $n
       (call $scandir
-        (ref.data $dot_dir)
+        $tdir
         (frame.addr 0)
-        (ptr.null)
+        (ref.func $filter_mvs_or_dir)
         (ref.func $alphasort)))
-    (if (i32.ne $n (i32.const 5))
+    (if (i32.ne $n (i32.const 4))
       (then (return (i32.const -20)))
       (else))
 
@@ -281,37 +294,36 @@
         (local.set $i (i32.add $i (i32.const 1)))
         (br $print1_lp)))
 
-    ;; Verify exact alphabetical order of the 5 entries
+    ;; Verify exact alphabetical order of the 4 entries:
+    ;;   dirent_demo.mvs, libc_demo.mvs, multimod, queens.mvs
     (local.set $e0 (ptr.load offset=0  $list))
     (local.set $e1 (ptr.load offset=8  $list))
     (local.set $e2 (ptr.load offset=16 $list))
     (local.set $e3 (ptr.load offset=24 $list))
-    (local.set $e4 (ptr.load offset=32 $list))
 
     (if (i32.or
-          (i32.or (i32.ne (call $strcmp (field.addr $dirent $d_name $e0) (ref.data $exp_0)) (i32.const 0))
-                  (i32.ne (call $strcmp (field.addr $dirent $d_name $e1) (ref.data $exp_1)) (i32.const 0)))
-          (i32.or (i32.ne (call $strcmp (field.addr $dirent $d_name $e2) (ref.data $exp_2)) (i32.const 0))
-                  (i32.or (i32.ne (call $strcmp (field.addr $dirent $d_name $e3) (ref.data $exp_3)) (i32.const 0))
-                          (i32.ne (call $strcmp (field.addr $dirent $d_name $e4) (ref.data $exp_4)) (i32.const 0)))))
+          (i32.or (i32.ne (call $strcmp (field.addr $dirent $d_name $e0) (ref.data $exp_d))   (i32.const 0))
+                  (i32.ne (call $strcmp (field.addr $dirent $d_name $e1) (ref.data $exp_l))   (i32.const 0)))
+          (i32.or (i32.ne (call $strcmp (field.addr $dirent $d_name $e2) (ref.data $exp_dir)) (i32.const 0))
+                  (i32.ne (call $strcmp (field.addr $dirent $d_name $e3) (ref.data $exp_q))   (i32.const 0))))
       (then (return (i32.const -21)))
       (else))
 
     (call $freelist $list $n)
 
     ;; 2. Filtered & custom-sorted scan:
-    ;;    `scandir(".", &list, filter_mvs_or_dir, cmp_by_len_asc)`
+    ;;    `scandir(tdir, &list, filter_mvs_or_dir, cmp_by_len_asc)`
     (if (i32.ne $verbose (i32.const 0))
       (then (drop (call $puts (ref.data $hdr_scan2))))
       (else))
 
     (local.set $n
       (call $scandir
-        (ref.data $dot_dir)
+        $tdir
         (frame.addr 0)
         (ref.func $filter_mvs_or_dir)
         (ref.func $cmp_by_len_asc)))
-    (if (i32.ne $n (i32.const 3))
+    (if (i32.ne $n (i32.const 4))
       (then (return (i32.const -22)))
       (else))
 
@@ -328,15 +340,18 @@
         (local.set $i (i32.add $i (i32.const 1)))
         (br $print2_lp)))
 
-    ;; Verify length-sorted order: "sub_pkg" (7), "beta.mvs" (8), "gamma_long.mvs" (14)
+    ;; Verify length-sorted order:
+    ;;   "multimod" (8), "queens.mvs" (10), "libc_demo.mvs" (13), "dirent_demo.mvs" (15)
     (local.set $e0 (ptr.load offset=0  $list))
     (local.set $e1 (ptr.load offset=8  $list))
     (local.set $e2 (ptr.load offset=16 $list))
+    (local.set $e3 (ptr.load offset=24 $list))
 
     (if (i32.or
-          (i32.ne (call $strcmp (field.addr $dirent $d_name $e0) (ref.data $exp_3)) (i32.const 0))
-          (i32.or (i32.ne (call $strcmp (field.addr $dirent $d_name $e1) (ref.data $exp_1)) (i32.const 0))
-                  (i32.ne (call $strcmp (field.addr $dirent $d_name $e2) (ref.data $exp_2)) (i32.const 0))))
+          (i32.or (i32.ne (call $strcmp (field.addr $dirent $d_name $e0) (ref.data $exp_dir)) (i32.const 0))
+                  (i32.ne (call $strcmp (field.addr $dirent $d_name $e1) (ref.data $exp_q))   (i32.const 0)))
+          (i32.or (i32.ne (call $strcmp (field.addr $dirent $d_name $e2) (ref.data $exp_l))   (i32.const 0))
+                  (i32.ne (call $strcmp (field.addr $dirent $d_name $e3) (ref.data $exp_d))   (i32.const 0))))
       (then (return (i32.const -23)))
       (else))
 

@@ -65,7 +65,7 @@ A `.mvs` file consists of zero or more `(mvh-include ...)` directives followed b
 )
 ```
 
-- `(mvh-include system $<mod>)` searches the system header directories (`-L`, default `("lib/")`) for `<mod>.mvh` (or `<slashed>.mvh` for dotted names) and records `<mod>` as a system adapter dependency if any symbol from `<mod>` is referenced by the module.
+- `(mvh-include system $<mod>)` searches the system header directories (`-L`, default `("lib/" "<PREFIX>/lib")` when compiled with `-D PREFIX=...`, or `("lib/" "libs/")` otherwise) for `<mod>.mvh` (or `<slashed>.mvh` for dotted names) and records `<mod>` as a system adapter dependency if any symbol from `<mod>` is referenced by the module.
 - `(mvh-include $<hdr>)` searches the directory of the current file first, followed by local include directories (`-I`, default `("./")`).
 - Cyclic or duplicate `mvh-include` directives are automatically ignored.
 
@@ -88,7 +88,7 @@ Symbols declared in an `(interface $<mod> ...)` are visible both qualified (`$st
 
 ### 2.3 Target Description Files (`.mvt`)
 
-A `.mvt` file defines a single `(marv-target ...)` S-expression used by `marv -t <targdes>`:
+A `.mvt` file defines a single `(marv-target ...)` S-expression used by `marv -t <targdes>` (searched in `-T` directories, which default to `("target/" "<PREFIX>/target")` when compiled with `-D PREFIX=...`, or `("target/" "targets/")` otherwise):
 
 ```scheme
 (marv-target
@@ -535,7 +535,7 @@ When `marv` compiles a `.mvs` file, it records every referenced system module in
 /* marv-sys-deps: stdlib stdio */
 ```
 
-When `marv` is invoked in compile-and-link mode (without `-c`), it reads `marv-sys-deps` from the input modules/objects, locates the corresponding `lib/<mod>.c` files in the `-L` system directories (default `("lib/")`), and passes them to the target compiler/linker automatically.
+When `marv` is invoked in compile-and-link mode (without `-c`), it reads `marv-sys-deps` from the input modules/objects, locates the corresponding `lib/<mod>.c` files in the `-L` system directories (default `("lib/" "<PREFIX>/lib")` or `("lib/" "libs/")`), and passes them to the target compiler/linker automatically.
 
 ### 9.2 Structure of a Single-Source `lib/<mod>.c` Adapter
 

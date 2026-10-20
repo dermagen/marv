@@ -2,7 +2,7 @@
 
 A `.mvt` target description file is a `(marv-target ...)` S-expression specifying the target backend type (`wcpl`, `cc`, or `rv64g`), object file extension, and the command parameters used to invoke the target compiler and linker.
 
-`marv` requires a `-t TARGDES` option on every invocation and resolves `TARGDES` by searching the target lookup directories (`-T DIR`, defaulting to `("./")`) for `<DIR>/<TARGDES>.mvt`.
+`marv` requires a `-t TARGDES` option on every invocation and resolves `TARGDES` first as an explicit path (`<TARGDES>.mvt`) and then by searching the target lookup directories (`-T DIR`, defaulting to `("target/" "<PREFIX>/target")` when compiled with `-D PREFIX=...`, or `("target/" "targets/")` otherwise) for `<DIR>/<TARGDES>.mvt`.
 
 ---
 
@@ -54,5 +54,5 @@ If your WCPL installation keeps its standard library in a custom directory (for 
 And invoke `marv` with `-t my-wcpl`:
 
 ```sh
-marv -T targets -t my-wcpl -o prog.wasm prog.mvs
+marv -T target -t my-wcpl -o prog.wasm prog.mvs
 ```
