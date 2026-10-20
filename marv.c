@@ -94746,7 +94746,7 @@ case 162: /* clo k item cur-dir */
     r[16] = (hendblk(13+1));
   if ((ispair((r[1])))) {
     r[17] = (car((r[1])));
-  if ((((r[17]) == (mksymbol(internsym("mvh-include")))) && (1))) {
+  if ((((r[17]) == (mksymbol(internsym("include")))) && (1))) {
     /* r[0] */    
     /* r[1] */    
     /* r[2] */    
@@ -94995,7 +94995,7 @@ s_process_2Dinterface_2Ditem_21: /* k item iface-str wo-mod cur-dir sys-mods sys
     v7792_self_3F = bool_from_obj(bool_from_obj(r[18]) ? (r[18]) : obj_from_bool(strcmp(stringchars((r[3])), stringchars((r[17]))) == 0));
   if ((ispair((r[1])))) {
     r[18] = (car((r[1])));
-  if ((((r[18]) == (mksymbol(internsym("mvh-include")))) && (1))) {
+  if ((((r[18]) == (mksymbol(internsym("include")))) && (1))) {
     /* r[0] */    
     /* r[1] */    
     r[2] = r[4];  

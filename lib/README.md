@@ -5,9 +5,9 @@ The `lib/` directory contains MARV's standard library interface headers (`lib/*.
 Include a system module at the top of a `.mvs` or `.mvh` file using:
 
 ```scheme
-(mvh-include system $stdio)
-(mvh-include system $stdlib)
-(mvh-include system $sys.stat)
+(include system $stdio)
+(include system $stdlib)
+(include system $sys.stat)
 ```
 
 In compile-and-link mode, `marv` automatically resolves each included system `.mvh` header (`lib/<mod>.mvh`) to its companion `lib/<mod>.c` adapter file in the same directory and links it into the target binary.

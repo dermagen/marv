@@ -1,9 +1,9 @@
 ;;; unistd.mvh — MARV POSIX-like symbolic constants and system calls
 ;;; Matches WCPL `unistd.wo` and native `lib/unistd.c` (MARV internal ABI).
 
-(mvh-include system $errno)
-(mvh-include system $fcntl)
-(mvh-include system $string)
+(include system $errno)
+(include system $fcntl)
+(include system $string)
 
 (interface $unistd
   (const $STDIN_FILENO  i32 0)

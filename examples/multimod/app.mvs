@@ -4,12 +4,12 @@
 ;; `stdio`, `stdlib`, and `string`.
 ;; =============================================================================
 
-(mvh-include $app)
-(mvh-include $vec3)
-(mvh-include $stats)
-(mvh-include system $stdio)
-(mvh-include system $stdlib)
-(mvh-include system $string)
+(include $app)
+(include $vec3)
+(include $stats)
+(include system $stdio)
+(include system $stdlib)
+(include system $string)
 
 (module $app
 

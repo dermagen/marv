@@ -15,14 +15,14 @@
 ;;      pointer records (`div_t`, `stat`, `vec3`).
 ;; =============================================================================
 
-(mvh-include system $stdlib)
-(mvh-include system $stdio)
-(mvh-include system $string)
-(mvh-include system $math)
-(mvh-include system $errno)
-(mvh-include system $ctype)
-(mvh-include system $sys.stat)
-(mvh-include system $math.vec)
+(include system $stdlib)
+(include system $stdio)
+(include system $string)
+(include system $math)
+(include system $errno)
+(include system $ctype)
+(include system $sys.stat)
+(include system $math.vec)
 
 (module $libc_demo
 

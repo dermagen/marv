@@ -50,12 +50,12 @@ MARV `.mvs` and `.mvh` files are sequences of S-expressions using a subset of R7
 
 ### 2.1 Module Source Files (`.mvs`)
 
-A `.mvs` file consists of zero or more `(mvh-include ...)` directives followed by a single `(module $<modname> ...)` form:
+A `.mvs` file consists of zero or more `(include ...)` directives followed by a single `(module $<modname> ...)` form:
 
 ```scheme
-(mvh-include system $stdio)
-(mvh-include system $stdlib)
-(mvh-include $my_header)
+(include system $stdio)
+(include system $stdlib)
+(include $my_header)
 
 (module $my_mod
   ;; Data declarations
@@ -65,16 +65,16 @@ A `.mvs` file consists of zero or more `(mvh-include ...)` directives followed b
 )
 ```
 
-- `(mvh-include system $<mod>)` searches the system header directories (`-L`, default `("lib/" "<PREFIX>/lib")` when compiled with `-D PREFIX=...`, or `("lib/" "libs/")` otherwise) for `<mod>.mvh` (or `<slashed>.mvh` for dotted names) and records `<mod>` as a system adapter dependency if any symbol from `<mod>` is referenced by the module.
-- `(mvh-include $<hdr>)` searches the directory of the current file first, followed by local include directories (`-I`, default `("./")`).
-- Cyclic or duplicate `mvh-include` directives are automatically ignored.
+- `(include system $<mod>)` searches the system header directories (`-L`, default `("lib/" "<PREFIX>/lib")` when compiled with `-D PREFIX=...`, or `("lib/" "libs/")` otherwise) for `<mod>.mvh` (or `<slashed>.mvh` for dotted names) and records `<mod>` as a system adapter dependency if any symbol from `<mod>` is referenced by the module.
+- `(include $<hdr>)` searches the directory of the current file first, followed by local include directories (`-I`, default `("./")`).
+- Cyclic or duplicate `include` directives are automatically ignored.
 
 ### 2.2 Interface Header Files (`.mvh`)
 
-A `.mvh` file consists of zero or more `(mvh-include ...)` directives followed by one or more `(interface $<modname> ...)` forms:
+A `.mvh` file consists of zero or more `(include ...)` directives followed by one or more `(interface $<modname> ...)` forms:
 
 ```scheme
-(mvh-include system $sys.stat)
+(include system $sys.stat)
 
 (interface $stdio
   (const $EOF i32 -1)

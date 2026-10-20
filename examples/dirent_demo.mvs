@@ -7,9 +7,9 @@
 ;; function pointers (`ref.func`), and zero `c-` prefixes or FFI shims.
 ;; =============================================================================
 
-(mvh-include system $dirent)
-(mvh-include system $stdio)
-(mvh-include system $string)
+(include system $dirent)
+(include system $stdio)
+(include system $string)
 
 (module $dirent_demo
   (data $ex_dir     const align=1 "examples\x00;")

@@ -1,8 +1,8 @@
 ;;; math.mvh — MARV mathematical functions interface
 ;;; Matches WCPL `math.wo` and native `lib/math.c` (MARV internal ABI).
 
-(mvh-include system $errno)
-(mvh-include system $fenv)
+(include system $errno)
+(include system $fenv)
 
 (interface $math
   (const $FP_NAN       i32 0)

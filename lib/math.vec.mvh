@@ -1,5 +1,5 @@
 ;; math.vec.mvh - Example nested module interface (`math.vec.mvh` <-> `lib/math/vec.c`)
-(mvh-include system $math)
+(include system $math)
 
 (interface $math.vec
   ;; Fixed 24-byte 3D vector record

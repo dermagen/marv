@@ -75,7 +75,7 @@ Control flow follows WebAssembly's structured control constructs:
 
 ### 5. Modular Interfaces (`.mvh`), Records, and Calling Conventions
 
-Every MARV source file (`.mvs`) can include system headers (`(mvh-include system $stdio)`) and project headers (`(mvh-include $vec3)`) before its `(module $name ...)` definition.
+Every MARV source file (`.mvs`) can include system headers (`(include system $stdio)`) and project headers (`(include $vec3)`) before its `(module $name ...)` definition.
 
 Interface headers (`.mvh`) declare constants, records, functions, globals, and data segments using MARV's unified calling convention:
 

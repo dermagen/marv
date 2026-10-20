@@ -3,11 +3,11 @@
 ;;; Record returns (`div`, `ldiv`, `lldiv`) follow the WCPL model: destination
 ;;; pointer `$rp : ptr` is passed as the first argument and return type is void.
 
-(mvh-include system $errno)
-(mvh-include system $ctype)
-(mvh-include system $string)
-(mvh-include system $math)
-(mvh-include system $unistd)
+(include system $errno)
+(include system $ctype)
+(include system $string)
+(include system $math)
+(include system $unistd)
 
 (interface $stdlib
   (const $EXIT_SUCCESS i32 0)

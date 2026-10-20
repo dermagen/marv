@@ -1,10 +1,10 @@
 ;;; time.mvh — MARV date and time interface
 ;;; Matches WCPL `time.wo` and native `lib/time.c` (MARV internal ABI).
 
-(mvh-include system $errno)
-(mvh-include system $stdlib)
-(mvh-include system $string)
-(mvh-include system $stdio)
+(include system $errno)
+(include system $stdlib)
+(include system $string)
+(include system $stdio)
 
 (interface $time
   (const $CLOCKS_PER_SEC i64 1000000000)

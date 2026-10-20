@@ -2,9 +2,9 @@
 ;;; Header `sys.stat.mvh` corresponds to `lib/sys/stat.c` in the native C library
 ;;; and module `"stat"` (`wcpl/lib/stat.wo`) on the `.wo` target.
 
-(mvh-include system $errno)
-(mvh-include system $fcntl)
-(mvh-include system $string)
+(include system $errno)
+(include system $fcntl)
+(include system $string)
 
 (interface $sys.stat
   (module "stat")

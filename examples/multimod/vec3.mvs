@@ -3,8 +3,8 @@
 ;; Includes its own `.mvh` interface (`vec3.mvh`) plus system `$math`.
 ;; =============================================================================
 
-(mvh-include $vec3)
-(mvh-include system $math)
+(include $vec3)
+(include system $math)
 
 (module $vec3
 

@@ -1,8 +1,8 @@
 ;;; string.mvh — MARV string and memory operations interface
 ;;; Matches WCPL `string.wo` and native `lib/string.c` (MARV internal ABI).
 
-(mvh-include system $ctype)
-(mvh-include system $errno)
+(include system $ctype)
+(include system $errno)
 
 (interface $string
   (func $memcpy      (param $dst ptr) (param $src ptr) (param $n i32) (result ptr))

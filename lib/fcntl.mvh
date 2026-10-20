@@ -2,9 +2,9 @@
 ;;; Constants taken directly from WCPL/WASI `fcntl.h` (zero remapping on .wo).
 ;;; Native `lib/fcntl.c` adapts MARV/WASI open flags and fcntl commands to the host OS.
 
-(mvh-include system $errno)
-(mvh-include system $stdlib)
-(mvh-include system $string)
+(include system $errno)
+(include system $stdlib)
+(include system $string)
 
 (interface $fcntl
   (const $O_APPEND    i32 #x00000001)

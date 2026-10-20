@@ -71,7 +71,7 @@ Input files on the command line can be:
 
 In compile-and-link mode, `marv`:
 1. Compiles each `.mvs` file on the command line to its target object file next to the `.mvs` file.
-2. Inspects the `(mvh-include system $...)` dependencies of the input modules, locates the corresponding system `.mvh` headers in the `-L` lookup directories (default `("lib/")`), and pairs each with its `.c` adapter file in the same directory (`lib/<module>.c`).
+2. Inspects the `(include system $...)` dependencies of the input modules, locates the corresponding system `.mvh` headers in the `-L` lookup directories (default `("lib/")`), and pairs each with its `.c` adapter file in the same directory (`lib/<module>.c`).
 3. Invokes the target compiler/linker defined in the `.mvt` file with `-o FILE`, the module object files, and the required system `.c` adapter files.
 
 ```sh
@@ -91,5 +91,5 @@ marv -T target -t wcpl -o app.wasm \
 `marv` maintains three configurable search path lists:
 
 1. **Target Description Directories (`-T`)** — Defaults to `("target/" "<PREFIX>/target")` when `marv.c` is compiled with `-D PREFIX=...` (e.g. `/usr/local/share/marv/` via `Makefile`), or `("target/" "targets/")` if `-D PREFIX` was not given. Searched when resolving `-t TARGDES` to `<dir>/<TARGDES>.mvt` (after checking `<TARGDES>.mvt` directly).
-2. **System Header & Adapter Directories (`-L`)** — Defaults to `("lib/" "<PREFIX>/lib")` when `marv.c` is compiled with `-D PREFIX=...`, or `("lib/" "libs/")` if `-D PREFIX` was not given. Searched when resolving `(mvh-include system $foo.bar)` to `<dir>/foo.bar.mvh` and its companion adapter `<dir>/foo.bar.c`.
-3. **Local Header Directories (`-I`, default `("./")`)** — Searched (after the directory of the including file) when resolving `(mvh-include $foo.bar)` to `<dir>/foo.bar.mvh`.
+2. **System Header & Adapter Directories (`-L`)** — Defaults to `("lib/" "<PREFIX>/lib")` when `marv.c` is compiled with `-D PREFIX=...`, or `("lib/" "libs/")` if `-D PREFIX` was not given. Searched when resolving `(include system $foo.bar)` to `<dir>/foo.bar.mvh` and its companion adapter `<dir>/foo.bar.c`.
+3. **Local Header Directories (`-I`, default `("./")`)** — Searched (after the directory of the including file) when resolving `(include $foo.bar)` to `<dir>/foo.bar.mvh`.

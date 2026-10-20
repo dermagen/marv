@@ -3,12 +3,12 @@
 ;;; Variadic functions use `(param ...)`, which lowers to WCPL's trailing `$ap$ : ptr`
 ;;; pointing to an array of 16-byte `va_arg_t` slots in the caller's stack frame.
 
-(mvh-include system $errno)
-(mvh-include system $ctype)
-(mvh-include system $string)
-(mvh-include system $stdlib)
-(mvh-include system $fcntl)
-(mvh-include system $unistd)
+(include system $errno)
+(include system $ctype)
+(include system $string)
+(include system $stdlib)
+(include system $fcntl)
+(include system $unistd)
 
 (interface $stdio
   (const $EOF          i32 -1)

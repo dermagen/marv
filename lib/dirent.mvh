@@ -2,11 +2,11 @@
 ;;; Constants and `dirent` record layout taken directly from WCPL `dirent.h`
 ;;; (`DT_DIR=3`, `DT_REG=4`, `d_ino@0`, `d_type@8`, `d_name@9`).
 
-(mvh-include system $errno)
-(mvh-include system $stdlib)
-(mvh-include system $string)
-(mvh-include system $fcntl)
-(mvh-include system $unistd)
+(include system $errno)
+(include system $stdlib)
+(include system $string)
+(include system $fcntl)
+(include system $unistd)
 
 (interface $dirent
   ;; File-type constants (WCPL / WASI FILETYPE_* values)

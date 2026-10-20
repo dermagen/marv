@@ -3,10 +3,10 @@
 ;; Includes its own `stats.mvh`, sibling `vec3.mvh`, and system `stdio`/`stdlib`.
 ;; =============================================================================
 
-(mvh-include $stats)
-(mvh-include $vec3)
-(mvh-include system $stdio)
-(mvh-include system $stdlib)
+(include $stats)
+(include $vec3)
+(include system $stdio)
+(include system $stdlib)
 
 (module $stats
 

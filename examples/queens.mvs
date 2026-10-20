@@ -14,10 +14,10 @@
 ;;      in the caller's stack frame) + `fputs`/`fflush` on `(const $stdout)`.
 ;; =============================================================================
 
-(mvh-include system $stdio)
-(mvh-include system $stdlib)
-(mvh-include system $string)
-(mvh-include system $ctype)
+(include system $stdio)
+(include system $stdlib)
+(include system $string)
+(include system $ctype)
 
 (module $queens
 

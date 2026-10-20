@@ -37,19 +37,19 @@
 
 ;; 1. Verify that all 13 `.mvh` system headers parse and expand cleanly
 (let* ((test-forms
-         '((mvh-include system $ctype)
-           (mvh-include system $errno)
-           (mvh-include system $fenv)
-           (mvh-include system $math)
-           (mvh-include system $stdio)
-           (mvh-include system $stdlib)
-           (mvh-include system $string)
-           (mvh-include system $time)
-           (mvh-include system $unistd)
-           (mvh-include system $fcntl)
-           (mvh-include system $dirent)
-           (mvh-include system $sys.stat)
-           (mvh-include system $math.vec)
+         '((include system $ctype)
+           (include system $errno)
+           (include system $fenv)
+           (include system $math)
+           (include system $stdio)
+           (include system $stdlib)
+           (include system $string)
+           (include system $time)
+           (include system $unistd)
+           (include system $fcntl)
+           (include system $dirent)
+           (include system $sys.stat)
+           (include system $math.vec)
            (module $all_hdrs_test
              (func $check (export "check") (result i32)
                (return

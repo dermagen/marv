@@ -4,7 +4,7 @@
 ;; comparator `$cmp_sample_score_asc`, and sample pipeline functions.
 ;; =============================================================================
 
-(mvh-include $vec3)
+(include $vec3)
 
 (interface $stats
   (const $SAMPLE_TAG_BASE i32 100)
