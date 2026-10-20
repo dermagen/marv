@@ -59,16 +59,22 @@ for ex in dirent_demo libc_demo queens; do
     diff -u "/tmp/gh_marv_skint_${ex}.${ext}" "examples/$ex.$ext"
   done
 done
+rm -f examples/*.c examples/*.wo examples/*.s
 echo "  [PASS] Standalone marv binary generated .c, .wo, and .s identical to Skint marv.scm!"
 
-"$MARV_BIN" -T target -t cc -o /tmp/gh_marv_dirent examples/dirent_demo.mvs
+"$MARV_BIN" -v -T target -t cc -o /tmp/gh_marv_dirent examples/dirent_demo.mvs 2> /tmp/gh_marv_verbose.err
+grep -q "^marv -t cc -c -o .* examples/dirent_demo.mvs$" /tmp/gh_marv_verbose.err
+grep -q "^cc .* -o /tmp/gh_marv_dirent " /tmp/gh_marv_verbose.err
+test ! -f examples/dirent_demo.c
 "$MARV_BIN" -T target -t cc -o /tmp/gh_marv_libc   examples/libc_demo.mvs
+test ! -f examples/libc_demo.c
 "$MARV_BIN" -T target -t cc -o /tmp/gh_marv_queens examples/queens.mvs
+test ! -f examples/queens.c
 
 /tmp/gh_marv_dirent > /tmp/gh_marv_dirent_cc.out
 /tmp/gh_marv_libc
 /tmp/gh_marv_queens > /tmp/gh_marv_queens_cc.out
-echo "  [PASS] Standalone marv compile-and-link mode (-t cc) built and ran all examples!"
+echo "  [PASS] Standalone marv compile-and-link mode (-t cc) built and ran all examples using cleaned-up temporary objects!"
 
 echo ""
 echo "4. Testing 3-module separate compilation & mixed (.c + .mvs) linking with standalone marv..."

@@ -13,6 +13,7 @@
         (scheme char)
         (scheme cxr)
         (scheme inexact)
+        (scheme time)
         (scheme process-context)
         (only (skint) box unbox)
         (skint fl)
@@ -5346,7 +5347,58 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
             (loop (cdr ss) seen acc)
             (loop (cdr ss) (cons (car ss) seen) (cons (car ss) acc))))))
 
-(define (run-target-linker! mvt-info outfile obj-files sys-c-files verbose?)
+(define (marv-host-os)
+  (if (memq 'windows (features)) "win32" "unix"))
+
+(define *marv-process-seed* (modulo (abs (exact (truncate (current-jiffy)))) 1000000000))
+(define (marv-process-id) *marv-process-seed*)
+
+(define (marv-string-has-backslash? str)
+  (let ((len (string-length str)))
+    (let loop ((i 0))
+      (cond
+        ((= i len) #f)
+        ((char=? (string-ref str i) #\\) #t)
+        (else (loop (+ i 1)))))))
+
+(define (marv-nonempty-env name)
+  (let ((v (get-environment-variable name)))
+    (if (and (string? v) (> (string-length v) 0))
+        v
+        #f)))
+
+(define (marv-temp-dir)
+  (let* ((raw (or (marv-nonempty-env "TMPDIR")
+                  (marv-nonempty-env "TMP")
+                  (marv-nonempty-env "TEMP")
+                  (if (string=? (marv-host-os) "win32") "." "/tmp")))
+         (len (string-length raw))
+         (last (if (> len 0) (string-ref raw (- len 1)) #\/)))
+    (if (or (char=? last #\/) (char=? last #\\))
+        raw
+        (string-append raw (if (marv-string-has-backslash? raw) "\\" "/")))))
+
+(define *marv-temp-counter* 0)
+
+(define (marv-make-temp-obj obj-ext)
+  (let ((tdir (marv-temp-dir))
+        (pid-str (number->string (marv-process-id))))
+    (let loop ()
+      (let* ((idx *marv-temp-counter*)
+             (_ (set! *marv-temp-counter* (+ idx 1)))
+             (cand (string-append tdir "marv_" pid-str "_" (number->string idx) obj-ext)))
+        (if (file-exists? cand)
+            (loop)
+            cand)))))
+
+(define (cleanup-temp-files! paths)
+  (for-each
+    (lambda (p)
+      (when (file-exists? p)
+        (delete-file p)))
+    paths))
+
+(define (run-target-linker! mvt-info outfile obj-files sys-c-files temp-objs verbose?)
   (let* ((all-inputs (marv-dedup-strings (append obj-files sys-c-files)))
          (src-str (marv-string-join all-inputs " "))
          (link-tmpl (mvt-assq-val 'link-cmd mvt-info #f))
@@ -5368,8 +5420,9 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
                            ldlibs)
                    " ")))))
     (when verbose?
-      (fprintf (current-error-port) "[marv] ~a~%" cmd))
+      (fprintf (current-error-port) "~a~%" cmd))
     (let ((rc (%system cmd)))
+      (cleanup-temp-files! temp-objs)
       (when (not (= rc 0))
         (fprintf (current-error-port) "marv: linker command failed (exit ~a): ~a~%" rc cmd)
         (exit 1)))))
@@ -5451,26 +5504,36 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
                                 infile)
                        (exit 1))
                      (let ((dest (or outfile (marv-replace-ext infile obj-ext))))
+                       (when verbose?
+                         (fprintf (current-error-port)
+                                  "marv -t ~a -c -o ~a ~a~%"
+                                  targdes dest infile))
                        (when (file-exists? dest) (delete-file dest))
                        (call-with-output-file dest
                          (lambda (p) (compile-marv-file infile ttype p))))))
-                 ;; Mode 2: `-c` not given -- compile any `.mvs` files, gather system `.c`
-                 ;; dependencies, and link with `-o FILE`
+                 ;; Mode 2: `-c` not given -- compile any `.mvs` files to temporary
+                 ;; objects, gather system `.c` dependencies, link with `-o FILE`,
+                 ;; and delete temporary objects when done
                  (begin
                    (when (not outfile)
                      (fprintf (current-error-port)
                               "marv: -o FILE is required when -c is not specified~%")
                      (exit 1))
-                   (let floop ((fs restargs) (objs '()) (sys-cs '()))
+                   (let floop ((fs restargs) (objs '()) (temp-objs '()) (sys-cs '()))
                      (if (null? fs)
                          (run-target-linker! mvt-info
                                              outfile
                                              (reverse objs)
                                              (reverse sys-cs)
+                                             (reverse temp-objs)
                                              verbose?)
                          (let ((f (car fs)))
                            (if (marv-has-suffix? f ".mvs")
-                               (let ((dest (marv-replace-ext f obj-ext)))
+                               (let ((dest (marv-make-temp-obj obj-ext)))
+                                 (when verbose?
+                                   (fprintf (current-error-port)
+                                            "marv -t ~a -c -o ~a ~a~%"
+                                            targdes dest f))
                                  (when (file-exists? dest) (delete-file dest))
                                  (call-with-output-file dest
                                    (lambda (p) (compile-marv-file f ttype p)))
@@ -5478,10 +5541,12 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
                                                     *last-expanded-sys-mvh-paths*)))
                                    (floop (cdr fs)
                                           (cons dest objs)
+                                          (cons dest temp-objs)
                                           (append (reverse new-cs) sys-cs))))
                                (let ((new-cs (extract-sys-c-deps-from-object f)))
                                  (floop (cdr fs)
                                         (cons f objs)
+                                        temp-objs
                                         (append (reverse new-cs) sys-cs))))))))))))))))
 
 ;; Run CLI automatically when invoked as a program/script

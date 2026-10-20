@@ -31,7 +31,7 @@ marv -t TARGDES [-c] [OPTION]... FILE...
 | `-o` | `--output=FILE` | `FILE` | Output pathname (optional override in `-c` mode; required executable name when `-c` is omitted). |
 | `-L` | `--system-dir=DIR` | `DIR` | Add `DIR` to the system `.mvh` header and `.c` adapter lookup path (default: `("lib/" "<PREFIX>/lib")` or `("lib/" "libs/")`). |
 | `-I` | `--include-dir=DIR` | `DIR` | Add `DIR` to the project/local `.mvh` header lookup path (default: `("./")`). |
-| `-v` | `--verbose` | *(none)* | Print the underlying target compiler/linker command before executing it. |
+| `-v` | `--verbose` | *(none)* | Print each compilation step line and the linker command line to `stderr` before executing. |
 | `-h` | `--help` | *(none)* | Display command-line usage and options. |
 
 Options follow standard POSIX syntax (parsed via `(skint getopt)`): short flags may be clustered (e.g. `-vc`), and option arguments may be passed either separately (`-t cc`, `-o app`) or attached (`-tcc`, `--target=cc`, `--output=app`).
@@ -70,9 +70,10 @@ Input files on the command line can be:
 - A mix of `.mvs` files and target object files.
 
 In compile-and-link mode, `marv`:
-1. Compiles each `.mvs` file on the command line to its target object file next to the `.mvs` file.
-2. Inspects the `(include system $...)` dependencies of the input modules, locates the corresponding system `.mvh` headers in the `-L` lookup directories (default `("lib/")`), and pairs each with its `.c` adapter file in the same directory (`lib/<module>.c`).
+1. Compiles each `.mvs` file on the command line to a temporary target object file in the system temporary directory (`TMPDIR`, `TMP`, or `TEMP`, falling back to `/tmp` on Unix-like systems or `.` on Windows).
+2. Inspects the `(include system $...)` dependencies of the input modules, locates the corresponding system `.mvh` headers in the `-L` lookup directories (default `("lib/" "<PREFIX>/lib")` or `("lib/" "libs/")`), and pairs each with its `.c` adapter file in the same directory (`lib/<module>.c`).
 3. Invokes the target compiler/linker defined in the `.mvt` file with `-o FILE`, the module object files, and the required system `.c` adapter files.
+4. Deletes the temporary object files created during the run when finished.
 
 ```sh
 # Build a native executable from three .mvs modules
