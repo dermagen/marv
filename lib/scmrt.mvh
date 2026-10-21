@@ -32,7 +32,11 @@
   ;; GC: copies live objects (roots: $r[0..$live-1], slots registered
   ;; via $register_root, and the static area) into the other
   ;; semispace; needs $needs more words after collection; returns
-  ;; the new $hp
+  ;; the new $hp.  If the request (plus Skint's half-empty margin of
+  ;; twice the live size) does not fit a semispace, the semispaces
+  ;; are doubled until it does; only if the enlarged heap cannot be
+  ;; allocated does the collector print an error and exit with
+  ;; exit code 1.
   (func $collect (param $r ptr) (param $live i32) (param $hp ptr)
         (param $needs i32) (result ptr))
 
@@ -63,4 +67,19 @@
 
   ;; Scheme predicates
   (func $equal_p (param $a i64) (param $b i64) (result i32))
-  (func $eqv_p (param $a i64) (param $b i64) (result i32)))
+  (func $eqv_p (param $a i64) (param $b i64) (result i32))
+
+  ;; string support for the $scmn/$scmi libraries: the cxtype address to
+  ;; use as a string wrapper's header word, and payload allocation
+  ;; (malloc'd {i32 length, i32 chars[]}; one int32 codepoint per
+  ;; char).  The 2-word wrapper itself is allocated by compiled code
+  ;; on the GC heap and finalized by the collector.
+  (func $string_type (result i64))
+  (func $make_string_payload (param $len i32) (param $fill i32)
+        (result ptr))
+
+  ;; minimal text output to stdout: renders the core object graph
+  ;; (fixnum flonum boolean char string pair vector box null);
+  ;; $write_obj uses write-style (quoted strings, #\chars)
+  (func $display_obj (param $o i64))
+  (func $write_obj (param $o i64)))

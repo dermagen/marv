@@ -33,6 +33,15 @@
  * The active semispace base is exported as $heap_limit and updated
  * by collect; allocation bumps $hp downward toward it.
  *
+ * Heap growth (Skint's cxm_hgc "bump", k.c): when, after a collection,
+ * the live objects plus the requested words -- with Skint's
+ * make-heap-half-empty margin of twice the live size -- do not fit in
+ * a semispace, the semispaces are doubled (repeatedly) and the live
+ * objects are relocated into the enlarged region, which replaces the
+ * old one (the static area is copied across and its pointers rebased).
+ * If the enlarged region cannot be allocated, the collector prints an
+ * error message and exits with exit code 1.
+ *
  * $r (the root/scratch register array) is owned by the caller
  * (compiled code keeps it in a module data segment); the reg_words
  * argument of init is used as the initial capacity of the
@@ -71,6 +80,10 @@
 #define type_error       scmrt_type_error
 #define equal_p          scmrt_equal_p
 #define eqv_p            scmrt_eqv_p
+#define string_type      scmrt_string_type
+#define make_string_payload scmrt_make_string_payload
+#define display_obj      scmrt_display_obj
+#define write_obj        scmrt_write_obj
 #define heap_limit       scmrt_heap_limit
 #define heap_plus1       scmrt_heap_plus1
 #define hmask            scmrt_hmask
@@ -115,6 +128,7 @@ int64_t  hmask;                        /* in-heap test mask */
 
 /* heap state */
 static unsigned char *rt_region;       /* pow2-aligned region base */
+static unsigned char *rt_region_raw;   /* malloc block holding region */
 static size_t         rt_region_bytes; /* total region size, pow2 */
 static unsigned char *rt_static_lo;
 static unsigned char *rt_static_bump;
@@ -224,6 +238,7 @@ void *init(int32_t init_heap_words, int32_t reg_words)
     a = ((uintptr_t)raw + (rt_region_bytes - 1))
         & ~(uintptr_t)(rt_region_bytes - 1);
     rt_region = (unsigned char *)(void *)a;
+    rt_region_raw = raw;
   }
   memset(rt_region, 0, rt_region_bytes);
   rt_static_lo   = rt_region;
@@ -275,6 +290,42 @@ static unsigned char *rt_to_bump;      /* next copy goes below this */
 static obj_t        **rt_scanq;        /* copied objs awaiting scan */
 static size_t         rt_scanq_len, rt_scanq_cap;
 
+/* state of the collection pass in progress (normal or growing) */
+static unsigned char *ct_from_base;    /* from-space being evacuated */
+static size_t         ct_from_bytes;
+static unsigned char *ct_to_base;      /* to-space receiving copies */
+static size_t         ct_to_bytes;
+static unsigned char *ct_static_from;  /* static area of the old region */
+static size_t         ct_static_bytes; /* its size (2 * old semispace) */
+static unsigned char *ct_static_to;    /* static area of the new region */
+static int64_t        ct_old_plus1;    /* old region's mask-test base */
+static int64_t        ct_old_hmask;    /* old region's mask */
+static int            ct_growing;      /* relocating to a larger region */
+
+/* global-store boxes live in the static area; defined further below */
+static void rebase_global_store(obj_t old_base, size_t old_bytes,
+                                obj_t new_base);
+
+static int ct_is_objptr(obj_t o)
+{
+  return ((o - (obj_t)(uint64_t)ct_old_plus1)
+          & (obj_t)(uint64_t)ct_old_hmask) == 0;
+}
+
+static int ct_ptr_in(obj_t o, unsigned char *base, size_t bytes)
+{
+  return (o - (obj_t)(uintptr_t)base) < (obj_t)bytes;
+}
+
+/* Skint terminates the process when a grown heap cannot be allocated */
+static void grow_out_of_memory(size_t semi_words)
+{
+  fprintf(stderr,
+          "scmrt: out of memory: cannot grow heap to %zu words\n",
+          semi_words);
+  exit(1);
+}
+
 static void scanq_push(obj_t o)
 {
   if (rt_scanq_len == rt_scanq_cap) {
@@ -291,12 +342,22 @@ static obj_t forward(obj_t o)
   obj_t *cell, *dst;
   obj_t h;
   size_t words;
-  if (!is_objptr(o)) return o;
+  if (!ct_is_objptr(o)) return o;
+  /* static-area objects never move (on growth they are rebased to
+     the same offset in the new region's static area) */
+  if (ct_ptr_in(o, ct_static_from, ct_static_bytes))
+    return ct_growing
+      ? (obj_t)((uintptr_t)o
+                + (uintptr_t)(ct_static_to - ct_static_from))
+      : o;
   /* already in to-space (this also defuses forwarding words met as
-     cell values, e.g. the dead header slot of a copied static obj) */
-  if (o - (obj_t)(uintptr_t)rt_semi[rt_active ^ 1]
-      < (obj_t)rt_semi_bytes + sizeof(obj_t))
+     cell values) */
+  if (o - (obj_t)(uintptr_t)ct_to_base
+      < (obj_t)ct_to_bytes + sizeof(obj_t))
     return o & ~(obj_t)3;
+  /* only the from-space is evacuated; anything else in the region
+     (the inactive semispace, padding) is left untouched */
+  if (!ct_ptr_in(o, ct_from_base, ct_from_bytes)) return o;
   cell = (obj_t *)(uintptr_t)o;
   h = cell[-1];
   if ((h & 3) == 2) return h & ~(obj_t)3;      /* forwarding pointer */
@@ -331,21 +392,36 @@ static void natrec_push(obj_t *slot, cxtype_t *t, void *payload)
   rt_nats_len++;
 }
 
-void *collect(void *r, int32_t live, void *hp, int32_t needs)
+/* One Cheney pass: evacuate from_base into to_base, updating the
+   roots (the caller's regs[0..live-1], the registered slots, and the
+   static area).  When growing is set, the static area has already
+   been copied to static_to in the new region: its words still hold
+   old-region pointers and are updated there, static pointers are
+   rebased, and registered slots living in the static area move too.
+   Returns the new allocation pointer (bump pointer of to-space). */
+static void *collect_pass(obj_t *regs, int32_t live, void *hp,
+                          unsigned char *from_base, size_t from_bytes,
+                          unsigned char *to_base, size_t to_bytes,
+                          unsigned char *static_to, int growing)
 {
-  obj_t *regs = (obj_t *)(void *)r;
-  unsigned char *from_base, *to_base, *p, *top;
+  unsigned char *p, *top;
   int32_t i;
   size_t k;
-  (void)hp;
-  ensure_init();
-  from_base = rt_semi[rt_active];
-  to_base   = rt_semi[rt_active ^ 1];
-  top       = from_base + rt_semi_bytes;
+  ct_from_base    = from_base;
+  ct_from_bytes   = from_bytes;
+  ct_to_base      = to_base;
+  ct_to_bytes     = to_bytes;
+  ct_static_from  = rt_static_lo;
+  ct_static_bytes = 2 * rt_semi_bytes;
+  ct_static_to    = static_to;
+  ct_old_plus1    = heap_plus1;
+  ct_old_hmask    = hmask;
+  ct_growing      = growing;
 
   /* record from-space natives so the dead ones can be finalized
      once forwarding has decided who survived */
   rt_nats_len = 0;
+  top = from_base + from_bytes;
   for (p = (unsigned char *)hp; p < top;) {
     obj_t h = *(obj_t *)(void *)p;
     if ((h & 3) == 0)
@@ -354,15 +430,28 @@ void *collect(void *r, int32_t live, void *hp, int32_t needs)
     p += ((h & 1) ? ((size_t)(h >> 3) + 1) : 2) * sizeof(obj_t);
   }
 
-  rt_to_bump   = to_base + rt_semi_bytes;
+  rt_to_bump   = to_base + to_bytes;
   rt_scanq_len = 0;
 
   /* roots: the caller's live range, registered slots, static area */
   if (regs)
     for (i = 0; i < live; i++) regs[i] = forward(regs[i]);
-  for (k = 0; k < rt_roots_len; k++) *rt_roots[k] = forward(*rt_roots[k]);
-  for (p = rt_static_lo; p < rt_static_bump; p += sizeof(obj_t))
-    *(obj_t *)(void *)p = forward(*(obj_t *)(void *)p);
+  for (k = 0; k < rt_roots_len; k++) {
+    obj_t *slot = rt_roots[k];
+    if (growing
+        && (unsigned char *)slot >= ct_static_from
+        && (unsigned char *)slot < ct_static_from + ct_static_bytes)
+      rt_roots[k] = slot =
+        (obj_t *)(void *)(static_to + ((unsigned char *)slot
+                                       - ct_static_from));
+    *slot = forward(*slot);
+  }
+  {
+    unsigned char *sbase = growing ? static_to : rt_static_lo;
+    size_t sused = (size_t)(rt_static_bump - rt_static_lo);
+    for (p = sbase; p < sbase + sused; p += sizeof(obj_t))
+      *(obj_t *)(void *)p = forward(*(obj_t *)(void *)p);
+  }
 
   /* Cheney scan of the copied objects */
   for (k = 0; k < rt_scanq_len; k++) {
@@ -380,15 +469,87 @@ void *collect(void *r, int32_t live, void *hp, int32_t needs)
     if ((*rt_nats[k].hdr_slot & 3) != 2 && rt_nats[k].type->free != NULL)
       (*rt_nats[k].type->free)(rt_nats[k].payload);
 
+  return rt_to_bump;
+}
+
+void *collect(void *r, int32_t live, void *hp, int32_t needs)
+{
+  obj_t *regs = (obj_t *)(void *)r;
+  unsigned char *new_hp, *old_raw, *new_region, *new_raw;
+  size_t semi_words, live_words, want, new_semi_words;
+  size_t new_semi_bytes, new_region_bytes, used_static;
+  ensure_init();
+
+  /* first pass: collect into the other semispace as usual */
+  new_hp = (unsigned char *)collect_pass(
+      regs, live, hp, rt_semi[rt_active], rt_semi_bytes,
+      rt_semi[rt_active ^ 1], rt_semi_bytes, rt_static_lo, 0);
   rt_active  ^= 1;
   heap_limit  = rt_semi[rt_active];
-  if (needs > 0
-      && (size_t)(rt_to_bump - (unsigned char *)heap_limit)
-         < (size_t)needs * sizeof(obj_t)) {
-    fprintf(stderr, "scmrt: heap exhausted during collection\n");
-    abort();
+
+  /* Skint's bump policy (cxm_hgc): the request is charged, in
+     addition, twice the live size, so the heap is left at most half
+     full; if that does not fit, the semispaces are doubled (below)
+     until it does, instead of aborting */
+  semi_words = rt_semi_bytes / sizeof(obj_t);
+  live_words = (size_t)(rt_semi[rt_active] + rt_semi_bytes - new_hp)
+               / sizeof(obj_t);
+  want = needs > 0 ? (size_t)needs : 0;
+  if (want > (size_t)-1 - 2 * live_words) grow_out_of_memory(want);
+  want += 2 * live_words;
+  if (semi_words >= want) return new_hp;
+
+  /* grow: double the semispace size until the request fits */
+  new_semi_words = semi_words;
+  while (new_semi_words < want) {
+    if (new_semi_words > (size_t)-1 / 2) grow_out_of_memory(want);
+    new_semi_words *= 2;
   }
-  return rt_to_bump;
+  if (new_semi_words > (size_t)-1 / (4 * sizeof(obj_t)))
+    grow_out_of_memory(new_semi_words);
+  new_semi_bytes   = new_semi_words * sizeof(obj_t);
+  new_region_bytes = 4 * new_semi_bytes;
+  new_raw = (unsigned char *)malloc(new_region_bytes + new_region_bytes);
+  if (!new_raw) grow_out_of_memory(new_semi_words);
+  new_region = (unsigned char *)(void *)
+    (((uintptr_t)new_raw + (new_region_bytes - 1))
+     & ~(uintptr_t)(new_region_bytes - 1));
+
+  /* copy the static area across (same offsets), then relocate the
+     live objects from the current semispace into semispace 0 of the
+     new region; the pass rebases static pointers and updates the
+     static area, the registered slots, and rt_roots as it goes */
+  used_static = (size_t)(rt_static_bump - rt_static_lo);
+  memcpy(new_region, rt_static_lo, used_static);
+  if (regs
+      && (unsigned char *)regs >= rt_static_lo
+      && (unsigned char *)regs < rt_static_lo + 2 * rt_semi_bytes)
+    regs = (obj_t *)(void *)(new_region
+                             + ((unsigned char *)regs - rt_static_lo));
+  old_raw = rt_region_raw;
+  new_hp = (unsigned char *)collect_pass(
+      regs, live, new_hp, rt_semi[rt_active], rt_semi_bytes,
+      new_region + 2 * new_semi_bytes, new_semi_bytes, new_region, 1);
+  rebase_global_store((obj_t)(uintptr_t)rt_region, 2 * rt_semi_bytes,
+                      (obj_t)(uintptr_t)new_region);
+
+  /* adopt the new region (static 2S + semispaces at 2S and 3S) */
+  rt_region       = new_region;
+  rt_region_raw   = new_raw;
+  rt_region_bytes = new_region_bytes;
+  rt_semi_bytes   = new_semi_bytes;
+  rt_static_lo    = new_region;
+  rt_static_bump  = new_region + used_static;
+  rt_static_hi    = new_region + 2 * new_semi_bytes;
+  rt_semi[0]      = new_region + 2 * new_semi_bytes;
+  rt_semi[1]      = new_region + 3 * new_semi_bytes;
+  rt_active       = 0;
+  heap_limit      = rt_semi[0];
+  heap_plus1      = (int64_t)(uintptr_t)(rt_region + sizeof(obj_t));
+  hmask           = (int64_t)(0xffff000000000001ULL
+                               | ~(uint64_t)(rt_region_bytes - 1));
+  free(old_raw);
+  return new_hp;
 }
 
 /* ------------------------------------------------------------------ */
@@ -459,6 +620,19 @@ obj_t global_loc(void *cstr, void *hp)
   g->next = rt_gstore[b];
   rt_gstore[b] = g;
   return g->box;
+}
+
+/* heap growth: global-store boxes live in the static area, so their
+   recorded obj values must be rebased when the region moves */
+static void rebase_global_store(obj_t old_base, size_t old_bytes,
+                                obj_t new_base)
+{
+  unsigned b;
+  gnode_t *g;
+  for (b = 0; b < 991u; b++)
+    for (g = rt_gstore[b]; g; g = g->next)
+      if (g->box - old_base < (obj_t)old_bytes)
+        g->box += new_base - old_base;
 }
 
 /* ------------------------------------------------------------------ */
@@ -828,4 +1002,137 @@ static int rt_equal_rec(obj_t a, obj_t b, int depth)
 int32_t equal_p(obj_t a, obj_t b)
 {
   return rt_equal_rec(a, b, 0);
+}
+
+/* ------------------------------------------------------------------ */
+/* strings and text output (support for the $scmn/$scmi macro libs)   */
+/*                                                                    */
+/* Strings are Native wrappers around a malloc'd strpay_t            */
+/* ({int32 len; int32 chars[]}, one int32 codepoint per char).  The   */
+/* wrapper itself is an ordinary 2-word heap block allocated by       */
+/* compiled code; it needs to know the string cxtype address to use   */
+/* as its header word, hence string_type.  The collector finalizes    */
+/* dead wrappers through cxtype string_cxtype.free (= free).          */
+
+obj_t string_type(void)
+{
+  return (obj_t)(uintptr_t)&string_cxtype;
+}
+
+void *make_string_payload(int32_t len, int32_t fill)
+{
+  strpay_t *p = (strpay_t *)malloc(sizeof(strpay_t)
+                                   + (len > 0 ? (size_t)(len - 1) * 4 : 0));
+  int32_t i;
+  if (!p) { fprintf(stderr, "scmrt: out of memory\n"); abort(); }
+  p->len = len;
+  for (i = 0; i < len; i++) p->chars[i] = fill;
+  return (void *)p;
+}
+
+/* Minimal text-output rendering of the core object graph (fixnums,
+   flonums, booleans, chars, strings, pairs, vectors, boxes, null) to
+   stdout.  writep selects write-style (quoted strings, #\chars). */
+static void pr_obj(obj_t o, int writep)
+{
+  if (o == SCM_FALSE) { fputs("#f", stdout); return; }
+  if (o == SCM_TRUE)  { fputs("#t", stdout); return; }
+  if (o == SCM_NULL)  { fputs("()", stdout); return; }
+  if ((o & 3) == 3) {                                  /* fixnum */
+    fprintf(stdout, "%d", (int)(int32_t)((int64_t)o >> 2));
+    return;
+  }
+  if ((o & 3) == 1) {                                  /* immediate */
+    obj_t itag = (o >> 2) & 63;
+    if (itag == 2) {                                   /* char */
+      int32_t c = (int32_t)(o >> 8);
+      if (writep) {
+        if (c == 10) fputs("#\\newline", stdout);
+        else if (c == 32) fputs("#\\space", stdout);
+        else if (c >= 33 && c < 127) fprintf(stdout, "#\\%c", (int)c);
+        else fprintf(stdout, "#\\x%x", (unsigned)c);
+      }
+      else if (c < 128) putchar((int)c);
+      else putchar('?');
+      return;
+    }
+    if (itag == 5) { fputs("#<void>", stdout); return; }
+    if (itag == 7) { fputs("#<eof>", stdout); return; }
+    fputs("#<imm>", stdout);
+    return;
+  }
+  if (is_objptr(o)) {
+    obj_t *cell = (obj_t *)(uintptr_t)o;
+    obj_t h = cell[-1];
+    if (!(h & 1)) {                                    /* Native */
+      if (h == (obj_t)(uintptr_t)&string_cxtype) {
+        strpay_t *s = (strpay_t *)(uintptr_t)cell[0];
+        int32_t i;
+        if (writep) putchar('"');
+        for (i = 0; i < s->len; i++) {
+          int32_t c = s->chars[i];
+          if (writep && (c == '"' || c == '\\')) putchar('\\');
+          if (c < 128) putchar((int)c); else putchar('?');
+        }
+        if (writep) putchar('"');
+        return;
+      }
+      fputs("#<Native>", stdout);
+      return;
+    }
+    if (h == SCM_PAIR_HDR) {
+      obj_t t = o;
+      putchar('(');
+      for (;;) {
+        obj_t *tc = (obj_t *)(uintptr_t)t;
+        pr_obj(tc[0], writep);
+        t = tc[1];
+        if (t == SCM_NULL) break;
+        if (is_objptr(t) && ((obj_t *)(uintptr_t)t)[-1] == SCM_PAIR_HDR) {
+          putchar(' ');
+          continue;
+        }
+        fputs(" . ", stdout);
+        pr_obj(t, writep);
+        break;
+      }
+      putchar(')');
+      return;
+    }
+    if (((h >> 1) & 3) == MTAG_VECTOR) {
+      size_t n = (size_t)(h >> 3), j;
+      fputs("#(", stdout);
+      for (j = 0; j < n; j++) {
+        if (j) putchar(' ');
+        pr_obj(cell[j], writep);
+      }
+      putchar(')');
+      return;
+    }
+    if (h == SCM_BOX_HDR) {
+      fputs("#<box ", stdout);
+      pr_obj(cell[0], writep);
+      putchar('>');
+      return;
+    }
+    fputs("#<obj>", stdout);
+    return;
+  }
+  {                                                    /* flonum */
+    uint64_t bits = ~(uint64_t)o;
+    double d;
+    memcpy(&d, &bits, sizeof(d));
+    fprintf(stdout, "%g", d);
+    return;
+  }
+}
+
+void display_obj(obj_t o)
+{
+  pr_obj(o, 0);
+}
+
+void write_obj(obj_t o)
+{
+  pr_obj(o, 1);
 }
