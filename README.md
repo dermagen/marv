@@ -31,7 +31,7 @@ Pointer operations are explicit:
 - `(ptr.eqz p)`, `(ptr.eq p q)`, `(ptr.ne p q)`, `(ptr.lt_u p q)`, `(ptr.le_u p q)`, `(ptr.gt_u p q)`, `(ptr.ge_u p q)` — pointer comparisons
 - `(ptr.add p i32_off)`, `(ptr.sub p i32_off)`, `(ptr.add64 p i64_off)` — byte-offset pointer arithmetic
 - `(ptr.diff p q)` (`i32`), `(ptr.diff64 p q)` (`i64`) — byte difference between two pointers
-- `(ptr.load [offset=K] p)`, `(ptr.store [offset=K] p val)` — 8-byte pointer slot load and store
+- `(ptr.load [offset K] p)`, `(ptr.store [offset K] p val)` — 8-byte pointer slot load and store
 
 ### 2. Surface Syntax (`.mvs` and `.mvh`)
 
@@ -115,7 +115,7 @@ For the complete language specification, instruction set reference, calling conv
 
 ## Building & Installation
 
-MARV ships with a self-contained, pre-generated C source file (`marv.c` in the repository root, compiled from `src/sf/` by [#F](https://github.com/false-schemers/sharpF)) that builds with any standard C compiler without external dependencies.
+MARV ships with self-contained, pre-generated C sources (`m.c`, `r.c`, `v.c`, and `a.c` in the repository root, compiled from the corresponding units in `src/sf/` by [#F](https://github.com/false-schemers/sharpF)) that build with any standard C compiler without external dependencies.
 
 ### Unix-like Systems (Linux, macOS, BSD)
 
@@ -126,12 +126,12 @@ Optionally run `./configure` to set a custom installation `PREFIX` (defaults to 
 make
 ```
 
-`Makefile` compiles `marv.c` with `-D PREFIX=$(PREFIX)/share/marv/`, embedding `$(PREFIX)/share/marv/target` and `$(PREFIX)/share/marv/lib` into `marv`'s default target and library search paths alongside local `target/` and `lib/`.
+`Makefile` compiles `m.c r.c v.c a.c` with `-D PREFIX=$(PREFIX)/share/marv/`, embedding `$(PREFIX)/share/marv/target` and `$(PREFIX)/share/marv/lib` into `marv`'s default target and library search paths alongside local `target/` and `lib/`.
 
-You can also compile `marv.c` directly with your C compiler (with or without `-D PREFIX`):
+You can also compile the four C files directly with your C compiler (with or without `-D PREFIX`):
 
 ```sh
-cc -O2 -D PREFIX=/usr/local/share/marv/ -o marv marv.c -lm
+cc -O2 -D PREFIX=/usr/local/share/marv/ -o marv m.c r.c v.c a.c -lm
 ```
 
 To install `marv` (along with the standard library in `$(PREFIX)/share/marv/lib` and target descriptions in `$(PREFIX)/share/marv/target`, defaulting to `PREFIX=/usr/local`):
@@ -149,10 +149,10 @@ make CC=clang install
 
 ### Windows (MSVC / `cl`)
 
-Open a **Developer Command Prompt for Visual Studio** (x64 or x86 Native Tools Command Prompt) in the repository root and compile `marv.c` with `cl`:
+Open a **Developer Command Prompt for Visual Studio** (x64 or x86 Native Tools Command Prompt) in the repository root and compile the four C sources with `cl`:
 
 ```bat
-cl /nologo /O2 /Fe:marv.exe marv.c
+cl /nologo /O2 /Fe:marv.exe m.c r.c v.c a.c
 ```
 
 To compile and link a MARV program into a native Windows `.exe` using the included `target/cl.mvt` target description:
@@ -174,7 +174,7 @@ skint -p src/skint/marv.scm -t cc -o queens examples/queens.mvs
 
 ## Repository Layout
 
-- `marv.c` — Standalone C source of the MARV compiler & linker driver (compiled from `src/sf/` by `#F`).
+- `m.c`, `r.c`, `v.c`, `a.c` — Standalone C sources of the MARV compiler & linker driver (compiled from `src/sf/m.sf`, `src/sf/r.sf`, `src/sf/v.sf`, and `src/sf/a.sf` by `#F`).
 - `configure` — Optional configuration script (`./configure --prefix=PATH`) that writes `config.mk`.
 - `Makefile` — Build and installation rules for Unix-like systems.
 - [`doc/`](doc/README.md) — Complete MARV technical specification, instruction reference, calling conventions, and `lib/` adapter authoring guide.

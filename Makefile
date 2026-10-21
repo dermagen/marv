@@ -16,8 +16,8 @@ $(info prefix is set to $(PREFIX))
 
 all: marv
 
-marv: marv.c
-	$(CC) $(CFLAGS) -D PREFIX=$(DATADIR)/ $(LDFLAGS) -o $@ marv.c $(LDLIBS)
+marv: m.c r.c v.c a.c
+	$(CC) $(CFLAGS) -D PREFIX=$(DATADIR)/ $(LDFLAGS) -o $@ m.c r.c v.c a.c $(LDLIBS)
 
 test check: marv
 	bash test/run-tests.sh

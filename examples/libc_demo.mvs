@@ -27,13 +27,13 @@
 (module $libc_demo
 
   ;; Static read-only strings
-  (data $fmt_msg   const align=1 "%s:%d:%lld:%.2f\x00;")
-  (data $tag_str   const align=1 "MARV\x00;")
-  (data $exp_msg   const align=1 "MARV:42:1234567890123:3.25\x00;")
-  (data $num_str   const align=1 "  -9876543210xyz\x00;")
-  (data $flt_str   const align=1 "6.25\x00;")
-  (data $dot_dir   const align=1 ".\x00;")
-  (data $hello_out const align=1 "\x00;")
+  (data $fmt_msg   const align 1 "%s:%d:%lld:%.2f\x00;")
+  (data $tag_str   const align 1 "MARV\x00;")
+  (data $exp_msg   const align 1 "MARV:42:1234567890123:3.25\x00;")
+  (data $num_str   const align 1 "  -9876543210xyz\x00;")
+  (data $flt_str   const align 1 "6.25\x00;")
+  (data $dot_dir   const align 1 ".\x00;")
+  (data $hello_out const align 1 "\x00;")
 
   ;; ---------------------------------------------------------------------------
   ;; 1. Normal MARV Callback: `qsort` and `bsearch` Comparator
@@ -65,14 +65,14 @@
       (then (return (i32.const -1))))
 
     ;; Populate unsorted i32 values: [42, -7, 19, 108, 3, 99, -25, 42]
-    (i32.store offset=0  (local.get $arr) (i32.const 42))
-    (i32.store offset=4  (local.get $arr) (i32.const -7))
-    (i32.store offset=8  (local.get $arr) (i32.const 19))
-    (i32.store offset=12 (local.get $arr) (i32.const 108))
-    (i32.store offset=16 (local.get $arr) (i32.const 3))
-    (i32.store offset=20 (local.get $arr) (i32.const 99))
-    (i32.store offset=24 (local.get $arr) (i32.const -25))
-    (i32.store offset=28 (local.get $arr) (i32.const 42))
+    (i32.store offset 0  (local.get $arr) (i32.const 42))
+    (i32.store offset 4  (local.get $arr) (i32.const -7))
+    (i32.store offset 8  (local.get $arr) (i32.const 19))
+    (i32.store offset 12 (local.get $arr) (i32.const 108))
+    (i32.store offset 16 (local.get $arr) (i32.const 3))
+    (i32.store offset 20 (local.get $arr) (i32.const 99))
+    (i32.store offset 24 (local.get $arr) (i32.const -25))
+    (i32.store offset 28 (local.get $arr) (i32.const 42))
 
     ;; Sort via `qsort` passing `(ref.func $cmp_i32_asc)` directly!
     (call $qsort
@@ -83,14 +83,14 @@
 
     ;; Verify sorted elements: [-25, -7, 3, 19, 42, 42, 99, 108]
     (local.set $ok (i32.const 1))
-    (if (i32.ne (i32.load offset=0  (local.get $arr)) (i32.const -25)) (then (local.set $ok (i32.const 0))))
-    (if (i32.ne (i32.load offset=4  (local.get $arr)) (i32.const -7))  (then (local.set $ok (i32.const 0))))
-    (if (i32.ne (i32.load offset=8  (local.get $arr)) (i32.const 3))   (then (local.set $ok (i32.const 0))))
-    (if (i32.ne (i32.load offset=12 (local.get $arr)) (i32.const 19))  (then (local.set $ok (i32.const 0))))
-    (if (i32.ne (i32.load offset=16 (local.get $arr)) (i32.const 42))  (then (local.set $ok (i32.const 0))))
-    (if (i32.ne (i32.load offset=20 (local.get $arr)) (i32.const 42))  (then (local.set $ok (i32.const 0))))
-    (if (i32.ne (i32.load offset=24 (local.get $arr)) (i32.const 99))  (then (local.set $ok (i32.const 0))))
-    (if (i32.ne (i32.load offset=28 (local.get $arr)) (i32.const 108)) (then (local.set $ok (i32.const 0))))
+    (if (i32.ne (i32.load offset 0  (local.get $arr)) (i32.const -25)) (then (local.set $ok (i32.const 0))))
+    (if (i32.ne (i32.load offset 4  (local.get $arr)) (i32.const -7))  (then (local.set $ok (i32.const 0))))
+    (if (i32.ne (i32.load offset 8  (local.get $arr)) (i32.const 3))   (then (local.set $ok (i32.const 0))))
+    (if (i32.ne (i32.load offset 12 (local.get $arr)) (i32.const 19))  (then (local.set $ok (i32.const 0))))
+    (if (i32.ne (i32.load offset 16 (local.get $arr)) (i32.const 42))  (then (local.set $ok (i32.const 0))))
+    (if (i32.ne (i32.load offset 20 (local.get $arr)) (i32.const 42))  (then (local.set $ok (i32.const 0))))
+    (if (i32.ne (i32.load offset 24 (local.get $arr)) (i32.const 99))  (then (local.set $ok (i32.const 0))))
+    (if (i32.ne (i32.load offset 28 (local.get $arr)) (i32.const 108)) (then (local.set $ok (i32.const 0))))
 
     ;; Search for key = 99 via `bsearch`
     (i32.store (frame.addr 0) (i32.const 99))

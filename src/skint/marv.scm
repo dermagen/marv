@@ -471,14 +471,22 @@
 ;; 4. Flattening Pass (Supports Both Flat/Postfix and Folded S-Expressions)
 ;; -----------------------------------------------------------------------------
 
-;; Parse optional offset=K / align=A or numeric immediates on load/store/ref.data
-(define (parse-kv-num sym prefix)
-  (if (symbol? sym)
-      (let ((s (symbol->string sym)))
-        (if (string-prefix? prefix s)
-            (string->number (substring s (string-length prefix) (string-length s)))
-            #f))
-      #f))
+;; Parse optional `offset N` / `align N` attributes on load/store/ref.data
+;; Two-element attributes: `offset 16`, `align 8`, `size 640`.
+;; The glued WAT-style forms (offset=16) are gone -- gluing a value
+;; onto a symbol with #\= was a bad idea inherited from WAT.  When
+;; TOKS starts with KEY followed by a number, returns (value . rest);
+;; #f otherwise.  A stray token containing #\= in attribute position
+;; is reported rather than silently misparsed.
+(define (attr-value toks key)
+  (cond ((and (pair? toks) (pair? (cdr toks))
+              (eq? (car toks) key) (number? (cadr toks)))
+         (cons (cadr toks) (cddr toks)))
+        ((and (pair? toks) (symbol? (car toks))
+              (string-index (symbol->string (car toks)) #\=))
+         (error "glued key=value attributes are not supported; use the two-element form, e.g. (offset 16)"
+                (car toks)))
+        (else #f)))
 
 ;; Normalize a sequence of flat tokens, parenthesized flat instructions, or folded S-expressions
 ;; into a canonical list of postfix instructions with structured nodes:
@@ -620,25 +628,21 @@
                          (k (instr-imm-count info)))
                      (cond
                        ((memq kind '(load store))
-                        ;; Consume optional offset=K and align=A tokens
+                        ;; Consume optional `offset N` and `align N` tokens
                         (let mloop ((r (cdr rest)) (off #f) (aln #f))
                           (cond
-                            ((and (pair? r) (parse-kv-num (car r) "offset="))
-                             => (lambda (v) (mloop (cdr r) v aln)))
-                            ((and (pair? r) (parse-kv-num (car r) "align="))
-                             => (lambda (v) (mloop (cdr r) off v)))
+                            ((attr-value r 'offset)
+                             => (lambda (p) (mloop (cdr p) (car p) aln)))
+                            ((attr-value r 'align)
+                             => (lambda (p) (mloop (cdr p) off (car p))))
                             (else
                              (loop r (cons (list (list f (or off 0) (or aln (instr-nat-align info)))) acc))))))
                        ((eq? kind 'ref-data)
                         (let* ((r1 (cdr rest))
                                (sym (car r1))
-                               (r2 (cdr r1))
-                               (off (if (and (pair? r2) (parse-kv-num (car r2) "offset="))
-                                        (parse-kv-num (car r2) "offset=")
-                                        0))
-                               (r3 (if (and (pair? r2) (parse-kv-num (car r2) "offset="))
-                                       (cdr r2)
-                                       r2)))
+                               (p (attr-value (cdr r1) 'offset))
+                               (off (if p (car p) 0))
+                               (r3 (if p (cdr p) (cdr r1))))
                           (loop r3 (cons (list (list 'ref.data sym off)) acc))))
                        ((memq kind '(call-indirect return-call-indirect))
                         (let ciloop ((r (cdr rest)) (ptypes '()) (rtype #f))
@@ -745,7 +749,8 @@
              (let ((kind (instr-kind info))
                    (nat-align (instr-nat-align info)))
                (case kind
-                 ;; Memory loads & stores: optional [offset [align]] or offset=K align=A
+                 ;; Memory loads & stores: optional [offset [align]] numbers
+                 ;; or the two-element forms `offset N` / `align N`
                  ((load store)
                   (let parse-mem ((r args) (off #f) (aln #f))
                     (cond
@@ -753,10 +758,10 @@
                        (parse-mem (cdr r) (car r) aln))
                       ((and (pair? r) (number? (car r)) (not aln))
                        (parse-mem (cdr r) off (car r)))
-                      ((and (pair? r) (parse-kv-num (car r) "offset="))
-                       => (lambda (v) (parse-mem (cdr r) v aln)))
-                      ((and (pair? r) (parse-kv-num (car r) "align="))
-                       => (lambda (v) (parse-mem (cdr r) off v)))
+                      ((attr-value r 'offset)
+                       => (lambda (p) (parse-mem (cdr p) (car p) aln)))
+                      ((attr-value r 'align)
+                       => (lambda (p) (parse-mem (cdr p) off (car p))))
                       (else
                        (let ((final-off (or off 0))
                              (final-aln (or aln nat-align))
@@ -764,12 +769,12 @@
                          (append folded-operands
                                  (list (list op final-off final-aln))))))))
 
-                 ;; ref.data $sym [offset]
+                 ;; ref.data $sym [offset | offset N]
                  ((ref-data)
                   (let* ((sym (car args))
                          (r (cdr args))
                          (off (cond ((and (pair? r) (number? (car r))) (car r))
-                                    ((and (pair? r) (parse-kv-num (car r) "offset=")) => (lambda (v) v))
+                                    ((attr-value r 'offset) => (lambda (p) (car p)))
                                     (else 0))))
                     (list (list 'ref.data sym off))))
 
@@ -970,14 +975,12 @@
          (r2 (if (and (pair? r1) (memq (car r1) '(const var))) (cdr r1) r1))
          (align (cond ((and (pair? r2) (pair? (car r2)) (eq? (caar r2) 'align))
                        (cadar r2))
-                      ((and (pair? r2) (parse-kv-num (car r2) "align="))
-                       => (lambda (v) v))
+                      ((attr-value r2 'align) => (lambda (p) (car p)))
                       (else 8)))
-         (r3 (if (and (pair? r2)
-                      (or (and (pair? (car r2)) (eq? (caar r2) 'align))
-                          (parse-kv-num (car r2) "align=")))
-                 (cdr r2)
-                 r2))
+         (r3 (cond ((and (pair? r2) (pair? (car r2)) (eq? (caar r2) 'align))
+                    (cdr r2))
+                   ((attr-value r2 'align) => (lambda (p) (cdr p)))
+                   (else r2)))
          (expanded (expand-data-items r3)))
     (list 'data name export-name mut align (car expanded) (cdr expanded))))
 
@@ -1040,10 +1043,10 @@
               (dloop (cdr r) (cadar r) sz))
              ((and (pair? (car r)) (eq? (caar r) 'size))
               (dloop (cdr r) align (cadar r)))
-             ((parse-kv-num (car r) "align=")
-              => (lambda (v) (dloop (cdr r) v sz)))
-             ((parse-kv-num (car r) "size=")
-              => (lambda (v) (dloop (cdr r) align v)))
+             ((attr-value r 'align)
+              => (lambda (p) (dloop (cdr p) (car p) sz)))
+             ((attr-value r 'size)
+              => (lambda (p) (dloop (cdr p) align (car p))))
              (else
               (dloop (cdr r) align sz))))))
       ((memory)
@@ -4366,9 +4369,6 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
               (else
                (loop (cdr cs) off max-al explicit-sz explicit-al flds))))))))
 
-(define (make-offset-sym off)
-  (string->symbol (string-append "offset=" (number->string off))))
-
 (define (marv-dirname path)
   (let loop ((i (- (string-length path) 1)))
     (cond ((< i 0) ".")
@@ -4394,6 +4394,7 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
          (sys-mvh-paths '())
          (sys-mods '())
          (const-env '())    ;; alist: ($SYM . ('scalar type . val)) or ($SYM . ('expr . sexp))
+        (macro-env '())    ;; alist: ($SYM . macrodef) -- see register-macro!
          (record-env '())   ;; alist: ($R . (rname size align fields))
          (ifunc-env '())    ;; alist: ($fn . (canon-sym fixed-ptypes rtype variadic? ret-rec imp-sexp))
          (iglobal-env '())  ;; alist: ($g  . (canon-sym vtype imp-sexp))
@@ -4417,6 +4418,17 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
     (define (add-ifunc! k v)  (set! ifunc-env (cons (cons k v) ifunc-env)))
     (define (add-iglobal! k v) (set! iglobal-env (cons (cons k v) iglobal-env)))
     (define (add-idata! k v)  (set! idata-env (cons (cons k v) idata-env)))
+
+    ;; Macros (see register-macro! / expand-func-macros below).
+    ;; Redefinition with a different body is an error (no shadowing);
+    ;; an identical redefinition (same header reached twice) is a no-op,
+    ;; as in C.
+    (define (add-macro! k v)
+      (let ((old (assq k macro-env)))
+        (cond ((not old) (set! macro-env (cons (cons k v) macro-env)))
+              ((equal? (cdr old) v) #f)
+              (else
+               (error "macro redefined with a different body (shadowing is not allowed)" k)))))
 
     (define (parse-interface-func! item iface-str wo-mod)
       ;; (func $fn (param ...) ... [(result ...)])
@@ -4491,6 +4503,80 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
                   (else
                    (loop (cdr cs) fixed-params variadic? rtype ret-rec))))))))
 
+    (define (mx-distinct? xs)
+      (cond ((null? xs) #t)
+            ((memq (car xs) (cdr xs)) #f)
+            (else (mx-distinct? (cdr xs)))))
+
+    ;; (macro $name (param ...)
+    ;;   [(locals ($x type) ...)] [(labels $L ...)]
+    ;;   (effect (tin ...) -> (tout ...))
+    ;;   template ...)
+    ;; Parses, validates, and registers a macro definition in macro-env.
+    ;; The (effect ...) clause is required; the declared stack effect is
+    ;; checked on every expansion (see mx-check-effect).  A definition is
+    ;; stored as (macro name params locals labels eff-in eff-out template)
+    ;; with locals an alist (sym . type).  Macro definitions may appear in
+    ;; .mvh interfaces and as module items; (include ...) inside an
+    ;; interface registers that header's macros too.
+    (define (register-macro! item iface-str wo-mod)
+      (let ((mname (cadr item))
+            (rest (cddr item)))
+        (when (not (and (pair? rest) (list? (car rest))))
+          (error "malformed (macro ...): missing parameter list" item))
+        (let loop ((cs (cdr rest)) (locals '()) (labels '()) (eff #f))
+          (if (and (pair? cs) (pair? (car cs))
+                   (memq (caar cs) '(locals labels effect)))
+              (case (caar cs)
+                ((locals)
+                 (loop (cdr cs)
+                       (append locals
+                               (map (lambda (lt)
+                                      (cons (car lt)
+                                            (normalize-marv-vtype (cadr lt))))
+                                    (cdar cs)))
+                       labels eff))
+                ((labels)
+                 (loop (cdr cs) locals (append labels (cdar cs)) eff))
+                ((effect)
+                 (let ((e (car cs)))
+                   (when (not (and (= (length e) 4) (list? (cadr e))
+                                   (eq? (caddr e) '->) (list? (cadddr e))))
+                     (error "malformed (effect (tin ...) -> (tout ...)) in macro definition"
+                            mname e))
+                   (loop (cdr cs) locals labels
+                         (cons (map normalize-marv-vtype (cadr e))
+                               (map normalize-marv-vtype (cadddr e)))))))
+              (begin
+                (when (not eff)
+                  (error "macro definition requires an (effect ...) clause" mname item))
+                (when (not (pair? cs))
+                  (error "macro definition has no template body" mname item))
+                (let* ((params (car rest))
+                       (template (if (null? (cdr cs)) (car cs) (cons 'seq cs)))
+                       (def (list 'macro mname params locals labels
+                                  (car eff) (cdr eff) template))
+                       (lnames (map car locals)))
+                  (for-each
+                    (lambda (p)
+                      (when (not (symbol? p))
+                        (error "macro parameter is not a symbol" mname p)))
+                    params)
+                  (when (not (mx-distinct? params))
+                    (error "duplicate macro parameter" mname params))
+                  (when (not (mx-distinct? (append lnames labels)))
+                    (error "duplicate macro local/label name" mname))
+                  (for-each
+                    (lambda (p)
+                      (when (memq p (append lnames labels))
+                        (error "macro parameter collides with a declared local/label"
+                               mname p)))
+                    params)
+                  (register-dual! add-macro! iface-str mname def)
+                  (when (not (string=? iface-str wo-mod))
+                    (register-dual! add-macro! wo-mod mname def))
+                  (add-macro! (qualify-mod-sym wo-mod mname) def)))))))
+
     (define (process-interface-item! item iface-str wo-mod cur-dir)
       (let ((self? (or (string=? iface-str self-mod-str)
                        (string=? wo-mod self-mod-str))))
@@ -4518,6 +4604,8 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
                (register-dual! add-record! iface-str rname rinfo)
                (when (not (string=? iface-str wo-mod))
                  (register-dual! add-record! wo-mod rname rinfo))))
+            ((macro)
+             (register-macro! item iface-str wo-mod))
             ((func)
              (when (not self?)
                (parse-interface-func! item iface-str wo-mod)))
@@ -4638,6 +4726,8 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
               (case (car it)
                 ((const c-const)
                  (process-interface-item! it mstr mstr base-dir))
+                ((macro)
+                 (process-interface-item! it mstr mstr base-dir))
                 ((record struct)
                  (process-interface-item! it mstr mstr base-dir))
                 ((global)
@@ -4709,6 +4799,361 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
                              (else
                               (plp (cdr cs) pts va? rt rrec)))))))))))
           mitems))
+
+      ;; ---------------------------------------------------------------
+      ;; MARV macros: expansion + stack-effect checking.
+      ;;
+      ;; A macro use is ($name arg ...) -- a $-symbol in head position.
+      ;; No other MARV form has that shape, so macro calls cannot be
+      ;; confused with instructions, (call ...)s, or data, and macro
+      ;; names live in their own namespace (they cannot shadow -- or be
+      ;; shadowed by -- instructions).  Macro definitions come from
+      ;; (macro ...) items in .mvh interfaces and in the module itself
+      ;; (see register-macro!).
+      ;;
+      ;; Expansion rewrites each (func ...) form before lower-func-def
+      ;; runs.  Declared macro locals are renamed to fresh symbols and
+      ;; spliced in as (local ...) items (both lower-func-def and
+      ;; parse-func pick those up anywhere in the form); declared
+      ;; labels and block/loop labels introduced by the template are
+      ;; renamed likewise.  Everything else in a template is deliberate
+      ;; unhygienic assembler capture (e.g. reading/assigning the
+      ;; caller's $hp).  A macro expands to a single form, usually
+      ;; (seq ...), and may leave any number of values on the stack --
+      ;; its declared (effect ...) says how many, and is checked on
+      ;; the fully expanded code of every use.
+      ;; ---------------------------------------------------------------
+
+      (define mx-fresh-counter 0)
+
+      (define (mx-fresh sym)
+        (set! mx-fresh-counter (+ mx-fresh-counter 1))
+        (string->symbol
+          (string-append (symbol->string sym) "$m"
+                         (number->string mx-fresh-counter))))
+
+      ;; symbol-wise substitution; env is an alist sym -> form
+      (define (mx-subst form env)
+        (cond ((symbol? form)
+               (let ((e (assq form env))) (if e (cdr e) form)))
+              ((pair? form)
+               (cons (mx-subst (car form) env) (mx-subst (cdr form) env)))
+              (else form)))
+
+      (define (mx-distinct-list xs)
+        (let loop ((xs xs) (seen '()))
+          (cond ((null? xs) (reverse seen))
+                ((memq (car xs) seen) (loop (cdr xs) seen))
+                (else (loop (cdr xs) (cons (car xs) seen))))))
+
+      ;; labels introduced by (block $L ...) / (loop $L ...) inside a
+      ;; template, excluding names bound as macro parameters
+      (define (mx-template-labels form params)
+        (cond ((not (pair? form)) '())
+              ((and (memq (car form) '(block loop))
+                    (pair? (cdr form)) (symbol? (cadr form))
+                    (not (memq (cadr form) params)))
+               (cons (cadr form) (mx-template-labels (cdr form) params)))
+              (else (append (mx-template-labels (car form) params)
+                            (mx-template-labels (cdr form) params)))))
+
+      ;; ---- stack-effect checker (abstract interpretation) -----------
+      ;; Stacks are lists with the top in the car.  Types are i32,
+      ;; i64, f32, f64, ptr, or 'any (unknown; matches everything).
+
+      (define (mx-type-match? a b)
+        (or (eq? a b) (eq? a 'any) (eq? b 'any)))
+
+      (define (mx-pop1 stack want ctx)
+        (cond ((null? stack)
+               (error "macro effect check: stack underflow" ctx))
+              ((mx-type-match? (car stack) want) (cdr stack))
+              (else (error "macro effect check: type mismatch on stack"
+                           ctx "expected" want "found" (car stack)))))
+
+      ;; types are in push order (bottom first), as in *instr-table*
+      (define (mx-pop-list stack types ctx)
+        (let loop ((ts (reverse types)) (s stack))
+          (if (null? ts) s (loop (cdr ts) (mx-pop1 s (car ts) ctx)))))
+
+      (define (mx-push stack type)
+        (if type (cons type stack) stack))
+
+      (define (mx-stack-eq? s want)
+        (and (= (length s) (length want))
+             (let loop ((a (reverse s)) (b (reverse want)))
+               (cond ((null? a) #t)
+                     ((mx-type-match? (car a) (car b)) (loop (cdr a) (cdr b)))
+                     (else #f)))))
+
+      (define (mx-merge-stacks a b)
+        (map (lambda (x y) (if (eq? x 'any) y x)) a b))
+
+      (define (mx-tenv-type tenv sym)
+        (let ((e (assq sym tenv))) (if e (cdr e) 'any)))
+
+      (define (mx-global-type sym)
+        (let ((e (assq sym mod-globals)))
+          (if e (cdr e)
+              (let ((g (assq sym iglobal-env)))
+                (if g (list-ref (cdr g) 1) 'any)))))
+
+      ;; labels are ((lbl entry-height rt kind) ...); kind is *block* or *loop*
+      (define (mx-check-branch stack lbl labels ctx)
+        (let ((e (assq lbl labels)))
+          (when (not e)
+            (error "macro effect check: branch to a label the template does not own (declare it in (labels ...) or keep branches inside the template)"
+                   ctx lbl))
+          (let ((height (cadr e)) (rt (caddr e)) (kind (cadddr e)))
+            (cond ((eq? kind '*loop*)
+                   (when (not (= (length stack) height))
+                     (error "macro effect check: bad stack at loop branch" ctx lbl)))
+                  (rt
+                   (when (not (and (= (length stack) (+ height 1))
+                                   (mx-type-match? (car stack) rt)))
+                     (error "macro effect check: bad stack at branch" ctx lbl)))
+                  (else
+                   (when (not (= (length stack) height))
+                     (error "macro effect check: bad stack at branch" ctx lbl)))))))
+
+      (define (mx-end-check stack def ctx)
+        (when (not (mx-stack-eq? stack (reverse (list-ref def 6))))
+          (error "macro effect check: stack at template exit does not match the declared effect"
+                 ctx (list-ref def 1)
+                 "declared" (list-ref def 5) '-> (list-ref def 6))))
+
+      (define (mx-step-call ins stack ctx)
+        (let ((callee (cadr ins)))
+          (let ((ce (assq callee ifunc-env))
+                (me (assq callee mod-funcs)))
+            (cond
+              (ce (let ((d (cdr ce)))
+                    (when (list-ref d 3)
+                      (error "macro effect check: cannot check a call to a variadic function" ctx ins))
+                    (when (list-ref d 4)
+                      (error "macro effect check: cannot check a call to a record-returning function" ctx ins))
+                    (mx-push (mx-pop-list stack (list-ref d 1) ins)
+                             (list-ref d 2))))
+              (me (let ((d (cdr me)))
+                    (when (list-ref d 2)
+                      (error "macro effect check: cannot check a call to a variadic function" ctx ins))
+                    (when (list-ref d 3)
+                      (error "macro effect check: cannot check a call to a record-returning function" ctx ins))
+                    (mx-push (mx-pop-list stack (list-ref d 0) ins)
+                             (list-ref d 1))))
+              (else
+               (error "macro effect check: call to unknown function (a signature is needed)"
+                      ctx ins))))))
+
+      ;; One flat instruction; returns the new stack or 'dead (every
+      ;; continuing path leaves the function or an owned block).
+      (define (mx-step ins stack labels tenv def ctx)
+        (let ((op (car ins)))
+          (cond
+            ((eq? op 'local.get)
+             (mx-push stack (mx-tenv-type tenv (cadr ins))))
+            ((eq? op 'local.set)
+             (mx-pop1 stack (mx-tenv-type tenv (cadr ins)) ins))
+            ((eq? op 'local.tee)
+             (mx-push (mx-pop1 stack (mx-tenv-type tenv (cadr ins)) ins)
+                      (if (null? stack) 'any (car stack))))
+            ((eq? op 'global.get)
+             (mx-push stack (mx-global-type (cadr ins))))
+            ((eq? op 'global.set)
+             (mx-pop1 stack (mx-global-type (cadr ins)) ins))
+            ((eq? op 'call)
+             (mx-step-call ins stack ctx))
+            ((eq? op 'return_call)
+             (mx-end-check (mx-step-call ins stack ctx) def ctx)
+             'dead)
+            ((eq? op 'call_indirect)
+             ;; flat form: (call_indirect ptypes rtype); funcref on top
+             (mx-push (mx-pop-list stack (append (cadr ins) '(ptr)) ins)
+                      (caddr ins)))
+            ((eq? op 'return_call_indirect)
+             (mx-end-check
+               (mx-push (mx-pop-list stack (append (cadr ins) '(ptr)) ins)
+                        (caddr ins))
+               def ctx)
+             'dead)
+            ((eq? op 'br)
+             (mx-check-branch stack (cadr ins) labels ins)
+             'dead)
+            ((eq? op 'br_if)
+             (let ((s (mx-pop1 stack 'i32 ins)))
+               (mx-check-branch s (cadr ins) labels ins)
+               s))
+            ((eq? op 'br_table)
+             (let ((s (mx-pop1 stack 'i32 ins)))
+               (for-each (lambda (l) (mx-check-branch s l labels ins))
+                         (append (cadr ins) (list (caddr ins))))
+               'dead))
+            ((eq? op 'return)
+             (mx-end-check stack def ctx)
+             'dead)
+            ((eq? op 'unreachable) 'dead)
+            (else
+             (let ((info (lookup-instr op)))
+               (when (not info)
+                 (error "macro effect check: unknown instruction in template" ctx op))
+               (mx-push (mx-pop-list stack (instr-pop-types info) ins)
+                        (instr-push-type info)))))))
+
+      ;; Simulate a flat instruction list from STACK; returns the
+      ;; resulting stack, or 'dead if control leaves on every path.
+      (define (mx-sim insns stack labels tenv def ctx)
+        (cond
+          ((null? insns) stack)
+          (else
+           (let ((ins (car insns)) (rest (cdr insns)))
+             (cond
+               ((and (pair? ins) (memq (car ins) '(*block* *loop*)))
+                (let* ((tag (car ins)) (lbl (cadr ins)) (rt (caddr ins))
+                       (labels2 (cons (list lbl (length stack) rt tag) labels))
+                       (res (mx-sim (cadddr ins) stack labels2 tenv def ctx)))
+                  (when (not (eq? res 'dead))
+                    (mx-check-block-end res stack rt ins ctx))
+                  (mx-sim rest (mx-push stack rt) labels tenv def ctx)))
+               ((and (pair? ins) (eq? (car ins) '*if*))
+                (let* ((rt (cadr ins))
+                       (s0 (mx-pop1 stack 'i32 ins))
+                       (norm (lambda (r) (if (eq? r 'dead) (mx-push s0 rt) r)))
+                       (st (norm (mx-sim (caddr ins) s0 labels tenv def ctx)))
+                       (se (norm (mx-sim (cadddr ins) s0 labels tenv def ctx))))
+                  (if (mx-stack-eq? st se)
+                      (mx-sim rest (mx-merge-stacks st se) labels tenv def ctx)
+                      (error "macro effect check: if branches disagree on stack effect"
+                             ctx ins))))
+               (else
+                (let ((s2 (mx-step ins stack labels tenv def ctx)))
+                  (if (eq? s2 'dead)
+                      'dead
+                      (mx-sim rest s2 labels tenv def ctx)))))))))
+
+      (define (mx-check-block-end res entry rt ins ctx)
+        (cond (rt
+               (when (not (and (= (length res) (+ (length entry) 1))
+                               (mx-type-match? (car res) rt)
+                               (mx-stack-eq? (cdr res) entry)))
+                 (error "macro effect check: block body does not produce its declared result"
+                        ctx ins)))
+              (else
+               (when (not (mx-stack-eq? res entry))
+                 (error "macro effect check: block body changes the stack"
+                        ctx ins)))))
+
+      ;; (const $X) pushes a value of unknown type; model it in the
+      ;; checker only as an 'any-typed local read (the real code is
+      ;; untouched -- lower-expr resolves consts after expansion).
+      (define (mx-replace-consts form)
+        (cond ((not (pair? form)) form)
+              ((eq? (car form) 'const) '(local.get $mx-any$))
+              (else (cons (mx-replace-consts (car form))
+                          (mx-replace-consts (cdr form))))))
+
+      ;; Check the declared (effect ...) of DEF against its fully
+      ;; expanded instantiation FORM, given enclosing local types TENV.
+      (define (mx-check-effect def form tenv ctx)
+        (let* ((flat (flatten-one (mx-replace-consts
+                                    (if (pair? form) form (list 'seq form)))))
+               (start (reverse (list-ref def 5)))
+               (res (mx-sim flat start '() tenv def ctx)))
+          (cond ((eq? res 'dead) #t)
+                ((mx-stack-eq? res (reverse (list-ref def 6))) #t)
+                (else
+                 (error "macro effect mismatch" ctx (list-ref def 1)
+                        "declared" (list-ref def 5) '-> (list-ref def 6))))))
+
+      ;; Expand all macro uses in one (func ...) form.
+      (define (expand-func-macros fn-form)
+        (if (null? macro-env)
+            fn-form
+            (let ((injected '())       ; (local $fresh type) items, reversed
+                  (fuel 10000))
+              (define (consume-fuel! ctx)
+                (set! fuel (- fuel 1))
+                (when (<= fuel 0)
+                  (error "macro expansion too deep (recursive macro?)" ctx)))
+              ;; local types of the enclosing function, for the checker
+              (define (base-tenv clauses)
+                (let loop ((cs clauses) (acc (list (cons '$mx-any$ 'any))))
+                  (cond ((null? cs) acc)
+                        ((and (pair? (car cs)) (memq (caar cs) '(param local)))
+                         (let ((ps (cdar cs)))
+                           (if (and (= (length ps) 2) (symbol? (car ps)))
+                               (loop (cdr cs)
+                                     (cons (cons (car ps)
+                                                 (normalize-marv-vtype (cadr ps)))
+                                           acc))
+                               (loop (cdr cs) acc))))
+                        (else (loop (cdr cs) acc)))))
+              ;; Instantiate DEF with ARGS: rename declared locals,
+              ;; labels, and template-introduced labels; substitute
+              ;; parameters; splice fresh (local ...) items into the
+              ;; enclosing function.  Returns (values form fresh-types).
+              (define (instantiate def args ctx)
+                (let ((mname (list-ref def 1))
+                      (params (list-ref def 2))
+                      (mlocals (list-ref def 3))
+                      (mlabels (list-ref def 4))
+                      (template (list-ref def 7)))
+                  (when (not (= (length args) (length params)))
+                    (error "macro arity mismatch" ctx "macro" mname
+                           "expects" (length params)
+                           "arguments, got" (length args)))
+                  (let* ((tl (filter (lambda (l) (not (memq l mlabels)))
+                                     (mx-template-labels template params)))
+                         (ren (append
+                                (map (lambda (lt) (cons (car lt) (mx-fresh (car lt))))
+                                     mlocals)
+                                (map (lambda (l) (cons l (mx-fresh l)))
+                                     (mx-distinct-list (append mlabels tl)))))
+                         (fresh-types (map (lambda (lt r) (cons (cdr r) (cdr lt)))
+                                           mlocals ren))
+                         (body (mx-subst (mx-subst template ren)
+                                         (map cons params args))))
+                    (for-each
+                      (lambda (ft)
+                        (set! injected
+                              (cons (list 'local (car ft) (cdr ft)) injected)))
+                      fresh-types)
+                    (values body fresh-types))))
+              (define (expand-form f tenv)
+                (cond
+                  ((not (pair? f)) f)
+                  ((and (symbol? (car f)) (assq (car f) macro-env))
+                   (let ((def (cdr (assq (car f) macro-env))))
+                     (consume-fuel! (car f))
+                     (let-values (((tmpl fresh-types)
+                                   (instantiate def
+                                                (map (lambda (a) (expand-form a tenv))
+                                                     (cdr f))
+                                                f)))
+                       (let ((tenv2 (append fresh-types tenv)))
+                         (let ((expanded (expand-form tmpl tenv2)))
+                           (mx-check-effect def expanded tenv2 f)
+                           expanded)))))
+                  (else
+                   (cons (expand-form (car f) tenv)
+                         (expand-form (cdr f) tenv)))))
+              (let* ((clauses (cddr fn-form))
+                     (tenv0 (base-tenv clauses))
+                     (expanded-items
+                       (map (lambda (it)
+                              (cond
+                                ((and (pair? it)
+                                      (memq (car it)
+                                            '(export param result frame local)))
+                                 it)
+                                ((and (pair? it) (eq? (car it) 'body))
+                                 (cons 'body
+                                       (map (lambda (b) (expand-form b tenv0))
+                                            (cdr it))))
+                                (else (expand-form it tenv0))))
+                            clauses)))
+                (append (list 'func (cadr fn-form))
+                        expanded-items
+                        (reverse injected))))))
 
       ;; Transform a single `(func $fname ...)` definition
       (define (lower-func-def fn-form)
@@ -4845,18 +5290,16 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
             ;; Lower an expression with current `va-cursor` offset
             (define (lower-expr x va-cursor)
               (cond
-                ;; `offset=$SYM`
+                ;; glued `offset=...` symbol (removed; see attr-value).
+                ;; The two-element form `offset $SYM` has its const
+                ;; resolved by the attr-aware list walk in the else
+                ;; clause below.
                 ((and (symbol? x)
                       (let ((s (symbol->string x)))
                         (and (> (string-length s) 7)
-                             (string=? (substring s 0 7) "offset=")
-                             (char=? (string-ref s 7) #\$))))
-                 (let* ((s (symbol->string x))
-                        (csym (string->symbol (substring s 7 (string-length s))))
-                        (ce (assq csym const-env)))
-                   (if (and ce (eq? (cadr ce) 'scalar))
-                       (make-offset-sym (cdddr ce))
-                       x)))
+                             (string=? (substring s 0 7) "offset="))))
+                 (error "glued offset= attributes are not supported; use the two-element form (offset <number>) or (offset $CONST)"
+                        x))
 
                 ((not (pair? x)) x)
 
@@ -4924,7 +5367,7 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
                      (error "cannot field.get aggregate field (use field.addr)" x))
                    (if (= foff 0)
                        (list lop pexpr)
-                       (list lop (make-offset-sym foff) pexpr))))
+                       (list lop 'offset foff pexpr))))
                 ((eq? (car x) 'field.set)
                  (let* ((fentry (lookup-record-field (cadr x) (caddr x)))
                         (foff   (list-ref fentry 3))
@@ -4935,7 +5378,7 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
                      (error "cannot field.set aggregate field (use field.addr)" x))
                    (if (= foff 0)
                        (list sop pexpr vexpr)
-                       (list sop (make-offset-sym foff) pexpr vexpr))))
+                       (list sop 'offset foff pexpr vexpr))))
 
                 ;; Variadic function intrinsics: `(va.start)`, `(va.count)`, `(va.arg $ap <type>)`
                 ((eq? (car x) 'va.start)
@@ -5061,7 +5504,25 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
                                       (,call-op ,csym ,@low-fixed (frame.addr ,(+ va-base 16)))))))))))
 
                 (else
-                 (map (lambda (sub) (lower-expr sub va-cursor)) x))))
+                 ;; Generic form: lower each element, resolving the
+                 ;; two-element attributes `offset $CONST` /
+                 ;; `align $CONST` (scalar consts) on the way.
+                 (let attrloop ((subs x) (acc '()))
+                   (cond
+                     ((null? subs) (reverse acc))
+                     ((and (memq (car subs) '(offset align))
+                           (pair? (cdr subs))
+                           (symbol? (cadr subs)))
+                      (let ((ce (assq (cadr subs) const-env)))
+                        (if (and ce (eq? (cadr ce) 'scalar))
+                            (attrloop (cddr subs)
+                                      (cons (cdddr ce) (cons (car subs) acc)))
+                            (error "offset/align value must be a number or a scalar const"
+                                   (car subs) (cadr subs)))))
+                     (else
+                      (attrloop (cdr subs)
+                                (cons (lower-expr (car subs) va-cursor)
+                                      acc))))))))
 
             ;; Lower all clauses of `(func $fname ...)`
             (let cloop ((cs clauses)
@@ -5125,10 +5586,10 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
                        (if (pair? it)
                            (case (car it)
                              ;; Strip compile-time `(const ...)` and `(record ...)` from core module
-                             ((const c-const record struct)
+                             ((const c-const record struct macro)
                               (mloop (cdr its) acc))
                              ((func)
-                              (mloop (cdr its) (cons (lower-func-def it) acc)))
+                              (mloop (cdr its) (cons (lower-func-def (expand-func-macros it)) acc)))
                              (else
                               (mloop (cdr its) (cons it acc))))
                            (mloop (cdr its) (cons it acc)))))))

@@ -18,7 +18,7 @@
 
   ;; Exported mutable global and exported read-only label data
   (global $sorted_runs (mut i32))
-  (data   $tag_label   const align=8 size=8)
+  (data   $tag_label   const align 8 size 8)
 
   ;; Variadic MARV function taking `$scale` and arbitrary `i32` varargs (`$ap$`)
   (func $weighted_sum_va (param $scale i32) (param ...) (result i32))

@@ -1,0 +1,228 @@
+;; =============================================================================
+;; MARV compilation unit A: the driver -- command-line option parsing
+;; (getopt), the CLI entry point (marv-main), and (main).
+;; =============================================================================
+
+#fload "m.sf"
+#fload "r.sf"
+#fload "v.sf"
+
+(define (get-next-command-line-option args optmap return)
+  (define (opt-lookup opt optmap)
+    (let ((iref (if (= (string-length opt) 2) cadr caddr)))
+      (let loop ((m optmap))
+        (cond ((null? m) #f)
+              ((equal? (iref (car m)) opt)
+               (cons (cadddr (car m)) (caar m)))
+              (else (loop (cdr m)))))))
+  (define (ssref s i)
+    (and i (< -1 i (string-length s)) (string-ref s i)))
+  (cond ((null? args) (return #f #f args))
+        ((string=? (car args) "--") (return #f #f (cdr args)))
+        ((string=? (car args) "-") (return #f #f args))
+        ((not (eqv? (ssref (car args) 0) #\-)) (return #f #f args))
+        ((and (eqv? (ssref (car args) 0) #\-) (eqv? (ssref (car args) 1) #\-))
+         (let* ((s (car args))
+                (slen (string-length s))
+                (p (string-index s #\=))
+                (opt (if p (substring s 0 p) s))
+                (ank (opt-lookup opt optmap)))
+           (cond ((and ank (car ank) p)
+                  (return (cdr ank) (substring s (+ 1 p) slen) (cdr args)))
+                 ((and ank (car ank) (pair? (cdr args)))
+                  (return (cdr ank) (cadr args) (cddr args)))
+                 ((and ank (car ank))
+                  (error "missing option argument" opt))
+                 ((and ank (not (car ank)) (not p))
+                  (return (cdr ank) #f (cdr args)))
+                 ((and ank (not (car ank)) p)
+                  (error "unexpected option argument" s))
+                 (else (error "unknown option" opt)))))
+        (else
+         (let* ((s (car args))
+                (l (string-length s))
+                (opt (substring s 0 2))
+                (ank (opt-lookup opt optmap)))
+           (cond ((and ank (car ank) (> l 2))
+                  (return (cdr ank) (substring s 2 l) (cdr args)))
+                 ((and ank (car ank) (= l 2) (pair? (cdr args)))
+                  (return (cdr ank) (cadr args) (cddr args)))
+                 ((and ank (car ank))
+                  (error "missing option argument" opt))
+                 ((and ank (not (car ank)) (> l 2))
+                  (return (cdr ank) #f
+                     (cons (string-append "-" (substring s 2 l)) (cdr args))))
+                 ((and ank (not (car ank)))
+                  (return (cdr ank) #f (cdr args)))
+                 (else (error "unknown option" opt)))))))
+
+(define (print-command-line-options optmap . ?port)
+  (define (optlen i)
+    (let* ((co (cadr i))
+           (lo (caddr i))
+           (oa (cadddr i))
+           (colen (if co (string-length co) 0))
+           (lolen (if lo (string-length lo) 0))
+           (oalen (if oa (string-length oa) 0)))
+      (when (= (+ colen lolen) 0) (error "invalid options record" i))
+      (+ (if (and (> colen 0) (> lolen 0)) (+ colen lolen 2) (+ colen lolen))
+         (if (= oalen 0) 0 (+ oalen 1)))))
+  (let* ((port (if (pair? ?port) (car ?port) (current-output-port)))
+         (optlens (map optlen optmap))
+         (max-optlen (apply max (cons 0 optlens))))
+    (let loop ((optmap optmap) (optlens optlens))
+      (unless (null? optmap)
+        (let ((i (car optmap)) (optlen (car optlens)))
+          (display "  " port)
+          (let ((co (cadr i)) (lo (caddr i)) (oa (cadddr i)) (hl (car (cddddr i))))
+            (cond ((and co lo)
+                   (display co port) (display ", " port) (display lo port)
+                   (when oa (display "=" port) (display oa port)))
+                  (co (display co port) (when oa (display " " port) (display oa port)))
+                  (lo (display lo port) (when oa (display "=" port) (display oa port))))
+            (display (make-string (- max-optlen optlen) #\space) port)
+            (display "    " port) (display hl port) (newline port)
+            (loop (cdr optmap) (cdr optlens))))))
+    (+ 2 max-optlen 4)))
+
+
+;; Search-path configuration.  Owned by the driver unit (A): marv-main
+;; set!s these from -T/-L/-I options; unit V only reads them (a set!
+;; crossing a compilation-unit boundary is not allowed by sfc).
+(define *mstd-target-dirs* (list "target/" (default-target-dir2)))
+(define *mstd-system-dirs* (list "lib/" (default-lib-dir2)))
+(define *mstd-local-dirs*  '("./"))
+
+;; -----------------------------------------------------------------------------
+;; Command-Line Interface (using `(skint getopt)`)
+;; -----------------------------------------------------------------------------
+
+(define *marv-cli-options*
+  '((target  "-t" "--target"      "TARGDES" "Target designation (.mvt name/path, required)")
+    (targdir "-T" "--target-dir"  "DIR"     "Add directory to .mvt lookup path (default: target/)")
+    (compile "-c" "--compile"     #f        "Compile one .mvs file to target object (.wo, .s, .c)")
+    (output  "-o" "--output"      "FILE"    "Output file (object with -c; executable without -c)")
+    (libdir  "-L" "--system-dir"  "DIR"     "Add directory to system .mvh/.c lookup path (default: lib/)")
+    (incdir  "-I" "--include-dir" "DIR"     "Add directory to local .mvh lookup path (default: ./)")
+    (verbose "-v" "--verbose"     #f        "Print executed compiler/linker command")
+    (help    "-h" "--help"        #f        "Display this help message")))
+
+(define (marv-usage port)
+  (fprintf port "MARV Compiler & Linker Driver~%")
+  (fprintf port "usage: marv -t TARGDES [-c] [OPTION]... FILE...~%~%")
+  (fprintf port "Options:~%")
+  (print-command-line-options *marv-cli-options* port))
+
+(define (marv-main args)
+  (let loop ((args args)
+             (targdes #f)
+             (compile-only? #f)
+             (outfile #f)
+             (verbose? #f))
+    (get-next-command-line-option args *marv-cli-options*
+      (lambda (keysym optarg restargs)
+        (case keysym
+          ((target)
+           (loop restargs optarg compile-only? outfile verbose?))
+          ((targdir)
+           (set! *mstd-target-dirs* (cons optarg *mstd-target-dirs*))
+           (loop restargs targdes compile-only? outfile verbose?))
+          ((compile)
+           (loop restargs targdes #t outfile verbose?))
+          ((output)
+           (loop restargs targdes compile-only? optarg verbose?))
+          ((libdir)
+           (set! *mstd-system-dirs* (cons optarg *mstd-system-dirs*))
+           (loop restargs targdes compile-only? outfile verbose?))
+          ((incdir)
+           (set! *mstd-local-dirs* (cons optarg *mstd-local-dirs*))
+           (loop restargs targdes compile-only? outfile verbose?))
+          ((verbose)
+           (loop restargs targdes compile-only? outfile #t))
+          ((help)
+           (marv-usage (current-output-port))
+           (exit 0))
+          ((#f)
+           (when (not targdes)
+             (fprintf (current-error-port) "marv: missing required -t TARGDES option~%~%")
+             (marv-usage (current-error-port))
+             (exit 1))
+           (when (null? restargs)
+             (fprintf (current-error-port) "marv: no input files specified~%~%")
+             (marv-usage (current-error-port))
+             (exit 1))
+           (let* ((mvt-path (find-mvt-file targdes))
+                  (mvt-info (load-mvt-file mvt-path))
+                  (ttype    (cdr (assq 'type mvt-info)))
+                  (obj-ext  (cdr (assq 'obj-ext mvt-info))))
+             (if compile-only?
+                 ;; Mode 1: `-c` given -- accept one `.mvs` file and generate its object file
+                 (begin
+                   (when (not (= (length restargs) 1))
+                     (fprintf (current-error-port)
+                              "marv: -c mode expects exactly one .mvs file (got ~a)~%"
+                              (length restargs))
+                     (exit 1))
+                   (let ((infile (car restargs)))
+                     (when (not (marv-has-suffix? infile ".mvs"))
+                       (fprintf (current-error-port)
+                                "marv: -c input file must have .mvs extension: ~a~%"
+                                infile)
+                       (exit 1))
+                     (let ((dest (or outfile (marv-replace-ext infile obj-ext))))
+                       (when verbose?
+                         (fprintf (current-error-port)
+                                  "marv -t ~a -c -o ~a ~a~%"
+                                  targdes dest infile))
+                       (when (file-exists? dest) (delete-file dest))
+                       (call-with-output-file dest
+                         (lambda (p) (compile-marv-file infile ttype p))))))
+                 ;; Mode 2: `-c` not given -- compile any `.mvs` files to temporary
+                 ;; objects, gather system `.c` dependencies, link with `-o FILE`,
+                 ;; and delete temporary objects when done
+                 (begin
+                   (when (not outfile)
+                     (fprintf (current-error-port)
+                              "marv: -o FILE is required when -c is not specified~%")
+                     (exit 1))
+                   (let floop ((fs restargs) (objs '()) (temp-objs '()) (sys-cs '()))
+                     (if (null? fs)
+                         (run-target-linker! mvt-info
+                                             outfile
+                                             (reverse objs)
+                                             (reverse sys-cs)
+                                             (reverse temp-objs)
+                                             verbose?)
+                         (let ((f (car fs)))
+                           (if (marv-has-suffix? f ".mvs")
+                               (let ((dest (marv-make-temp-obj obj-ext)))
+                                 (when verbose?
+                                   (fprintf (current-error-port)
+                                            "marv -t ~a -c -o ~a ~a~%"
+                                            targdes dest f))
+                                 (when (file-exists? dest) (delete-file dest))
+                                 (call-with-output-file dest
+                                   (lambda (p) (compile-marv-file f ttype p)))
+                                 (let ((new-cs (map mvh-path->adapter-c-path
+                                                    *last-expanded-sys-mvh-paths*)))
+                                   (floop (cdr fs)
+                                          (cons dest objs)
+                                          (cons dest temp-objs)
+                                          (append (reverse new-cs) sys-cs))))
+                               (let ((new-cs (extract-sys-c-deps-from-object f)))
+                                 (floop (cdr fs)
+                                        (cons f objs)
+                                        temp-objs
+                                        (append (reverse new-cs) sys-cs))))))))))))))))
+
+(define (main argv)
+  (let ((cmdline (command-line)))
+    (marv-main (if (pair? cmdline) (cdr cmdline) '())))
+  #f)
+
+(%localdef "#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC optimize(\"O0\")
+#endif")
+
+
+

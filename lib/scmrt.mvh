@@ -1,0 +1,66 @@
+;;; scmrt.mvh -- S-MARV runtime interface (Skint-style, Cheney GC)
+;;;
+;;; The counterpart C file (scmrt.c) is intentionally written in the
+;;; WCPL C dialect, so the same source compiles natively (cc) and to
+;;; a WCPL relocatable object (wcpl -c).  See smarv.html SS9.
+;;;
+;;; Object representation (obj is a 64-bit NaN-boxed i64 everywhere):
+;;;   fixnum   low bits 11, 30-bit payload in bits 2..31
+;;;   imm      low bits 01, 6-bit itag in bits 2..7, payload bits 8..31
+;;;            (TRUE=0, CHAR=2, NULL=3, SYMBOL=4, VOID=5, UNIT=6, EOF=7)
+;;;   flonum   bitwise complement of the f64 bit pattern
+;;;   heap ptr aligned address; header word at offset -8:
+;;;            hdr = (size<<3) | (mtag<<1) | 1
+;;;            mtags: TYPED=0 PACKED=1 CLOSURE=2 VECTOR=3
+;;;   Native bindings carry an even header (a cxtype_t* -- bit 1 is 0)
+;;;
+;;; Allocation bumps $hp DOWNWARD from the top of the active semispace
+;;; toward $scmrt:heap_limit; when $hp would cross it, compiled code
+;;; spills its live objects into $r[0..L-1] and calls $scmrt:collect.
+
+(interface $scmrt
+  (global $heap_limit (mut ptr))             ; base of active semispace
+  (global $heap_plus1 (mut i64))             ; heap base + 1 word, as i64
+  (global $hmask (mut i64))                  ; heap-pointer test mask
+
+  ;; startup: allocates the heap region (two semispaces of pow2 words
+  ;; plus an immortal static area for literals/global boxes) and
+  ;; returns the initial $hp.  $r itself is owned by the caller.
+  (func $init (param $init_heap_words i32) (param $reg_words i32)
+        (result ptr))
+
+  ;; GC: copies live objects (roots: $r[0..$live-1], slots registered
+  ;; via $register_root, and the static area) into the other
+  ;; semispace; needs $needs more words after collection; returns
+  ;; the new $hp
+  (func $collect (param $r ptr) (param $live i32) (param $hp ptr)
+        (param $needs i32) (result ptr))
+
+  ;; register an obj cell (an i64 slot address) as a permanent root
+  (func $register_root (param $slot_addr ptr) (result ptr))
+
+  ;; intern a symbol name; returns the symbol obj
+  (func $intern_sym (param $cstr ptr) (result i64))
+
+  ;; get-or-create the global store box for a name; returns box obj.
+  ;; Boxes live in the static area, so $hp is not consumed/changed.
+  (func $global_loc (param $cstr ptr) (param $hp ptr) (result i64))
+
+  ;; decode one literal in Skint's serialized format (rds_sexp);
+  ;; literals are allocated in the static area
+  (func $deserialize_sexp (param $cstr ptr) (param $r ptr) (param $hp ptr)
+        (result i64))
+
+  ;; rest-argument packing; returns new $hp
+  (func $build_rest_list (param $a0 i64) (param $r ptr) (param $hp ptr)
+        (param $rc i32) (param $req i32) (result ptr))
+
+  ;; cold error paths; print a diagnostic and abort, never return
+  (func $arity_error (param $clo ptr) (param $rc i32) (param $expected i32)
+        (result ptr))
+  (func $type_error (param $bad_obj i64) (param $expected_code i32)
+        (result ptr))
+
+  ;; Scheme predicates
+  (func $equal_p (param $a i64) (param $b i64) (result i32))
+  (func $eqv_p (param $a i64) (param $b i64) (result i32)))

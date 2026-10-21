@@ -12,16 +12,16 @@
 (include system $string)
 
 (module $dirent_demo
-  (data $ex_dir     const align=1 "examples\x00;")
-  (data $dot_dir    const align=1 ".\x00;")
-  (data $hdr_banner const align=1 "=== MARV-Lowered dirent Library Demo ===\x00;")
-  (data $hdr_scan1  const align=1 "1. scandir('examples', filter_mvs_or_dir, alphasort):\x00;")
-  (data $hdr_scan2  const align=1 "2. scandir('examples', filter_mvs_or_dir, cmp_by_len_asc):\x00;")
-  (data $ftr_pass   const align=1 "=== ALL LOWERED DIRENT CHECKS PASSED ===\x00;")
-  (data $exp_dir    const align=1 "multimod\x00;")
-  (data $exp_q      const align=1 "queens.mvs\x00;")
-  (data $exp_l      const align=1 "libc_demo.mvs\x00;")
-  (data $exp_d      const align=1 "dirent_demo.mvs\x00;")
+  (data $ex_dir     const align 1 "examples\x00;")
+  (data $dot_dir    const align 1 ".\x00;")
+  (data $hdr_banner const align 1 "=== MARV-Lowered dirent Library Demo ===\x00;")
+  (data $hdr_scan1  const align 1 "1. scandir('examples', filter_mvs_or_dir, alphasort):\x00;")
+  (data $hdr_scan2  const align 1 "2. scandir('examples', filter_mvs_or_dir, cmp_by_len_asc):\x00;")
+  (data $ftr_pass   const align 1 "=== ALL LOWERED DIRENT CHECKS PASSED ===\x00;")
+  (data $exp_dir    const align 1 "multimod\x00;")
+  (data $exp_q      const align 1 "queens.mvs\x00;")
+  (data $exp_l      const align 1 "libc_demo.mvs\x00;")
+  (data $exp_d      const align 1 "dirent_demo.mvs\x00;")
 
   ;; Return "examples" when running from the repository root, or "." if already inside `examples/`
   (func $target_dir
@@ -54,36 +54,36 @@
     (local.set $namlen (call $strlen $name))
 
     ;; "  [#"
-    (i32.store8 offset=0 $buf (i32.const 32))
-    (i32.store8 offset=1 $buf (i32.const 32))
-    (i32.store8 offset=2 $buf (i32.const 91))
-    (i32.store8 offset=3 $buf (i32.const 35))
-    (i32.store8 offset=4 $buf (i32.add (i32.const 48) $idx))
-    (i32.store8 offset=5 $buf (i32.const 93))
-    (i32.store8 offset=6 $buf (i32.const 32))
+    (i32.store8 offset 0 $buf (i32.const 32))
+    (i32.store8 offset 1 $buf (i32.const 32))
+    (i32.store8 offset 2 $buf (i32.const 91))
+    (i32.store8 offset 3 $buf (i32.const 35))
+    (i32.store8 offset 4 $buf (i32.add (i32.const 48) $idx))
+    (i32.store8 offset 5 $buf (i32.const 93))
+    (i32.store8 offset 6 $buf (i32.const 32))
 
     ;; "DIR" or "REG"
     (if (i32.eq $dtype (const $DT_DIR))
       (then
-        (i32.store8 offset=7 $buf (i32.const 68))  ;; 'D'
-        (i32.store8 offset=8 $buf (i32.const 73))  ;; 'I'
-        (i32.store8 offset=9 $buf (i32.const 82))) ;; 'R'
+        (i32.store8 offset 7 $buf (i32.const 68))  ;; 'D'
+        (i32.store8 offset 8 $buf (i32.const 73))  ;; 'I'
+        (i32.store8 offset 9 $buf (i32.const 82))) ;; 'R'
       (else
-        (i32.store8 offset=7 $buf (i32.const 82))  ;; 'R'
-        (i32.store8 offset=8 $buf (i32.const 69))  ;; 'E'
-        (i32.store8 offset=9 $buf (i32.const 71)))) ;; 'G'
+        (i32.store8 offset 7 $buf (i32.const 82))  ;; 'R'
+        (i32.store8 offset 8 $buf (i32.const 69))  ;; 'E'
+        (i32.store8 offset 9 $buf (i32.const 71)))) ;; 'G'
 
     ;; " (len="
-    (i32.store8 offset=10 $buf (i32.const 32))
-    (i32.store8 offset=11 $buf (i32.const 40))
-    (i32.store8 offset=12 $buf (i32.const 108))
-    (i32.store8 offset=13 $buf (i32.const 101))
-    (i32.store8 offset=14 $buf (i32.const 110))
-    (i32.store8 offset=15 $buf (i32.const 61))
-    (i32.store8 offset=16 $buf (i32.add (i32.const 48) (i32.div_s $namlen (i32.const 10))))
-    (i32.store8 offset=17 $buf (i32.add (i32.const 48) (i32.rem_s $namlen (i32.const 10))))
-    (i32.store8 offset=18 $buf (i32.const 41))
-    (i32.store8 offset=19 $buf (i32.const 32))
+    (i32.store8 offset 10 $buf (i32.const 32))
+    (i32.store8 offset 11 $buf (i32.const 40))
+    (i32.store8 offset 12 $buf (i32.const 108))
+    (i32.store8 offset 13 $buf (i32.const 101))
+    (i32.store8 offset 14 $buf (i32.const 110))
+    (i32.store8 offset 15 $buf (i32.const 61))
+    (i32.store8 offset 16 $buf (i32.add (i32.const 48) (i32.div_s $namlen (i32.const 10))))
+    (i32.store8 offset 17 $buf (i32.add (i32.const 48) (i32.rem_s $namlen (i32.const 10))))
+    (i32.store8 offset 18 $buf (i32.const 41))
+    (i32.store8 offset 19 $buf (i32.const 32))
 
     ;; Copy `d_name` bytes
     (local.set $pos (i32.const 20))
@@ -123,10 +123,10 @@
     ;; Check if last 4 characters are ".mvs" (46, 109, 118, 115)
     (local.set $name (ptr.add $name (i32.sub $len (i32.const 4))))
     (if (i32.and
-          (i32.and (i32.eq (i32.load8_u offset=0 $name) (i32.const 46))
-                   (i32.eq (i32.load8_u offset=1 $name) (i32.const 109)))
-          (i32.and (i32.eq (i32.load8_u offset=2 $name) (i32.const 118))
-                   (i32.eq (i32.load8_u offset=3 $name) (i32.const 115))))
+          (i32.and (i32.eq (i32.load8_u offset 0 $name) (i32.const 46))
+                   (i32.eq (i32.load8_u offset 1 $name) (i32.const 109)))
+          (i32.and (i32.eq (i32.load8_u offset 2 $name) (i32.const 118))
+                   (i32.eq (i32.load8_u offset 3 $name) (i32.const 115))))
       (then (return (i32.const 1)))
       (else (return (i32.const 0)))))
 
@@ -280,7 +280,7 @@
       (else))
 
     ;; Load `namelist` pointer from 8-byte frame slot 0
-    (local.set $list (ptr.load offset=0 (frame.addr 0)))
+    (local.set $list (ptr.load offset 0 (frame.addr 0)))
 
     (local.set $i (i32.const 0))
     (block $print1_done
@@ -296,10 +296,10 @@
 
     ;; Verify exact alphabetical order of the 4 entries:
     ;;   dirent_demo.mvs, libc_demo.mvs, multimod, queens.mvs
-    (local.set $e0 (ptr.load offset=0  $list))
-    (local.set $e1 (ptr.load offset=8  $list))
-    (local.set $e2 (ptr.load offset=16 $list))
-    (local.set $e3 (ptr.load offset=24 $list))
+    (local.set $e0 (ptr.load offset 0  $list))
+    (local.set $e1 (ptr.load offset 8  $list))
+    (local.set $e2 (ptr.load offset 16 $list))
+    (local.set $e3 (ptr.load offset 24 $list))
 
     (if (i32.or
           (i32.or (i32.ne (call $strcmp (field.addr $dirent $d_name $e0) (ref.data $exp_d))   (i32.const 0))
@@ -327,7 +327,7 @@
       (then (return (i32.const -22)))
       (else))
 
-    (local.set $list (ptr.load offset=0 (frame.addr 0)))
+    (local.set $list (ptr.load offset 0 (frame.addr 0)))
 
     (local.set $i (i32.const 0))
     (block $print2_done
@@ -342,10 +342,10 @@
 
     ;; Verify length-sorted order:
     ;;   "multimod" (8), "queens.mvs" (10), "libc_demo.mvs" (13), "dirent_demo.mvs" (15)
-    (local.set $e0 (ptr.load offset=0  $list))
-    (local.set $e1 (ptr.load offset=8  $list))
-    (local.set $e2 (ptr.load offset=16 $list))
-    (local.set $e3 (ptr.load offset=24 $list))
+    (local.set $e0 (ptr.load offset 0  $list))
+    (local.set $e1 (ptr.load offset 8  $list))
+    (local.set $e2 (ptr.load offset 16 $list))
+    (local.set $e3 (ptr.load offset 24 $list))
 
     (if (i32.or
           (i32.or (i32.ne (call $strcmp (field.addr $dirent $d_name $e0) (ref.data $exp_dir)) (i32.const 0))

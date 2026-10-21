@@ -1,3 +1,8 @@
+;; =============================================================================
+;; MARV compilation unit M: LibL runtime library (formerly libl.sf).
+;; This is the base unit; units A, R, and V are built on top of it.
+;; =============================================================================
+
 
 ;  LibL: Large RNRS compatibility library for #F, fixnum/flonum arithmetics 
 

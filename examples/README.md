@@ -2,7 +2,7 @@
 
 This directory contains single-module and multi-module example programs written in MARV (`.mvs` source files and `.mvh` interface headers).
 
-> **Precondition:** All command lines below assume that the `marv` compiler binary has been built from `marv.c` and installed in your `PATH` (for example via `make && sudo make install`; see the top-level [`README.md`](../README.md)).
+> **Precondition:** All command lines below assume that the `marv` compiler binary has been built from `m.c r.c v.c a.c` and installed in your `PATH` (for example via `make && sudo make install`; see the top-level [`README.md`](../README.md)).
 
 ## Overview of Examples
 

@@ -24,20 +24,20 @@
   ;; ---------------------------------------------------------------------------
   ;; Static ASCII String Literals
   ;; ---------------------------------------------------------------------------
-  (data $banner         const align=1
+  (data $banner         const align 1
     "========================================\n  MARV 8-Queens Solver (N = 8)\n========================================\n\x00;")
-  (data $sol_hdr_fmt    const align=1
+  (data $sol_hdr_fmt    const align 1
     "\nSolution #%d (packed=0x%08X, moves=%s):\n\x00;")
-  (data $col_hdr        const align=1
+  (data $col_hdr        const align 1
     "    a   b   c   d   e   f   g   h\n\x00;")
-  (data $row_sep        const align=1
+  (data $row_sep        const align 1
     "  +---+---+---+---+---+---+---+---+\n\x00;")
-  (data $cell_queen     const align=1 "| Q \x00;")
-  (data $cell_dark      const align=1 "| . \x00;")
-  (data $cell_light     const align=1 "|   \x00;")
-  (data $row_prefix_fmt const align=1 "%d \x00;")
-  (data $row_suffix_fmt const align=1 "| %d\n\x00;")
-  (data $summary_fmt    const align=1
+  (data $cell_queen     const align 1 "| Q \x00;")
+  (data $cell_dark      const align 1 "| . \x00;")
+  (data $cell_light     const align 1 "|   \x00;")
+  (data $row_prefix_fmt const align 1 "%d \x00;")
+  (data $row_suffix_fmt const align 1 "| %d\n\x00;")
+  (data $summary_fmt    const align 1
     "\nTotal solutions found : %d (92 expected)\nQuotient/rem by 8     : %d full groups + %d\nFirst packed board    : 0x%08X\nLast  packed board    : 0x%08X\nbsearch(last) index   : %d\n\x00;")
 
   ;; ---------------------------------------------------------------------------
@@ -197,13 +197,13 @@
     ;; Base case 1: `$row == 8` -> record solution and backtrack to row 7
     (if (i32.eq (local.get $row) (i32.const 8))
       (then
-        (local.set $cnt (i32.load offset=32 (local.get $state)))
+        (local.set $cnt (i32.load offset 32 (local.get $state)))
         (local.set $packed (call $pack_board (local.get $state)))
-        (local.set $sol_buf (ptr.load offset=40 (local.get $state)))
+        (local.set $sol_buf (ptr.load offset 40 (local.get $state)))
         (i32.store
           (ptr.add (local.get $sol_buf) (i32.shl (local.get $cnt) (i32.const 2)))
           (local.get $packed))
-        (i32.store offset=32 (local.get $state) (i32.add (local.get $cnt) (i32.const 1)))
+        (i32.store offset 32 (local.get $state) (i32.add (local.get $cnt) (i32.const 1)))
         (return_call $step_backtrack
           (i32.const 7)
           (i32.const 0)
@@ -271,7 +271,7 @@
     ;; When `$row < 0`, backtracking is finished; return total solution count!
     (if (i32.lt_s (local.get $row) (i32.const 0))
       (then
-        (return (i32.load offset=32 (local.get $state)))))
+        (return (i32.load offset 32 (local.get $state)))))
 
     ;; Remove queen at `(row, prev_col)` and resume `$step_place` at `(row, prev_col + 1)`
     (local.set $prev_col
@@ -333,7 +333,7 @@
 
     ;; Initialize solver state in frame[0..47]
     (drop (call $memset (frame.addr 0) (i32.const 0) (i32.const 48)))
-    (ptr.store offset=40 (frame.addr 0) (local.get $sol_buf))
+    (ptr.store offset 40 (frame.addr 0) (local.get $sol_buf))
 
     ;; Run must-tail-recursive backtracking solver starting at row=0, col=0
     (local.set $count
@@ -349,8 +349,8 @@
       (i32.const 4)
       (ref.func $cmp_packed))
 
-    (local.set $first_sol (i32.load offset=0   (local.get $sol_buf)))
-    (local.set $last_sol  (i32.load offset=364 (local.get $sol_buf))) ;; index 91 * 4 = 364
+    (local.set $first_sol (i32.load offset 0   (local.get $sol_buf)))
+    (local.set $last_sol  (i32.load offset 364 (local.get $sol_buf))) ;; index 91 * 4 = 364
 
     ;; Locate `$last_sol` via `bsearch`
     (i32.store (frame.addr 56) (local.get $last_sol))

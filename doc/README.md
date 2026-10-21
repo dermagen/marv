@@ -78,7 +78,7 @@ A `.mvh` file consists of zero or more `(include ...)` directives followed by on
 
 (interface $stdio
   (const $EOF i32 -1)
-  (data $_iob var align=4 size=640)
+  (data $_iob var align 4 size 640)
   (const $stdout ptr (ptr.add (ref.data $stdio:_iob) (i32.const 32)))
   (func $fputs (param $s ptr) (param $stream ptr) (result i32))
   (func $snprintf (param $buf ptr) (param $n i32) (param $fmt ptr) (param ...) (result i32)))
@@ -149,24 +149,24 @@ Inside `(module ...)`:
 
 ```scheme
 ;; String-initialized read-only or mutable data
-(data $msg const align=1 "Hello, MARV!\x00;")
+(data $msg const align 1 "Hello, MARV!\x00;")
 
 ;; Zero-initialized mutable buffer of N bytes
-(data $buf var align=8 (size 256))
+(data $buf var align 8 (size 256))
 
 ;; Structured byte/scalar/pointer array initializer
-(data $table const align=8 (export "table")
+(data $table const align 8 (export "table")
   (i32 10 20 30 0)
   (f64 1.5 -2.25)
   (ptr $msg 0))
 ```
 
 - Mutability keyword: `const` (read-only) or `var` (read-write).
-- Alignment keyword: `align=K` (power of 2; defaults to `1`).
+- Alignment keyword: `align K` (power of 2; defaults to `1`).
 - Optional `(export "external_name")`.
 - Data items in structured initializers:
   - `"..."` — raw string bytes
-  - `(size N)` or `size=N` — `N` zero bytes
+  - `(size N)` or `size N` — `N` zero bytes
   - `(i8 v...)` — 1-byte integers
   - `(i16 v...)` — 2-byte little-endian integers
   - `(i32 v...)` — 4-byte little-endian integers
@@ -175,10 +175,10 @@ Inside `(module ...)`:
   - `(f64 v...)` — 8-byte IEEE-754 little-endian doubles
   - `(ptr sym-or-0 ...)` — 8-byte pointer slots initialized to a data symbol `$sym` or `0` (`ptr.null`)
 
-Inside `(interface ...)`, external data segments are declared with `size=N`:
+Inside `(interface ...)`, external data segments are declared with `size N`:
 
 ```scheme
-(data $_iob var align=4 size=640)
+(data $_iob var align 4 size 640)
 ```
 
 ### 4.2 Global Variables (`global`)
@@ -212,6 +212,36 @@ Inside `(module ...)`:
 ```
 
 All `(param ...)`, `(result ...)`, `(frame ...)`, and `(local ...)` declarations must precede the instruction body.
+
+### 4.4 Assembler Macros (`macro`)
+
+A macro is an assembler-time template with a declared, machine-checked stack effect. Macros are defined inside `(interface ...)` headers (`.mvh`) or at module top level in a `.mvs` file, and are registered for every module that includes the header:
+
+```scheme
+;; Allocate a pair at the caller's $hp (which the template assigns
+;; to), store its two fields, and leave the pair pointer on the stack.
+(macro $cons ($a $d)
+  (effect () -> (ptr))
+  (local.set $hp (ptr.sub (local.get $hp) (i32.const 24)))
+  (i64.store offset 8  (local.get $hp) $a)
+  (i64.store offset 16 (local.get $hp) $d)
+  (local.get $hp))
+```
+
+A macro is invoked with a `$`-symbol in head position, a shape no other MARV form uses, so macro names can never collide with instructions. The arguments are substituted for the parameter symbols in the template:
+
+```scheme
+($cons (local.get $x) (local.get $y))
+```
+
+An optional `(locals ($t <type>) ...)` clause (placed before the `(effect ...)`) declares macro-private locals, and an optional `(labels $L ...)` clause declares macro-private labels.
+
+Semantics:
+
+- Parameters are substituted syntactically into the template (after the arguments themselves have been macro-expanded); an argument referenced twice is expanded twice.
+- `(locals ...)` and `(labels ...)` declare macro-private names. They are hygienically renamed on every expansion, and declared locals are allocated in the enclosing function. Any other `$name` in the template (e.g. a caller's `$hp` above) refers to the enclosing function's locals, which is what makes zero-overhead inline runtime helpers possible.
+- The `(effect (ins) -> (outs))` clause is required and is **checked**: the compiler simulates the template's stack effect and rejects the definition if it differs from the declared one. Branches in a template may only target labels the macro itself declares.
+- Redefinition follows the C rule: re-registering an identical macro (e.g. the same header included twice) is a no-op, while a different body under an existing name is a compile-time error — macros cannot shadow or override one another.
 
 ---
 
@@ -250,16 +280,16 @@ local.set $z
 
 ### 5.2 Memory Loads & Stores
 
-Every load and store instruction accepts an optional unsigned byte offset `offset=K` (`K >= 0`, default `0`) and optional alignment hint `align=A` before its operand expressions:
+Every load and store instruction accepts an optional unsigned byte offset `offset K` (`K >= 0`, default `0`) and optional alignment hint `align A` before its operand expressions. The offset may also be a scalar constant (`offset $CONST`):
 
 ```scheme
-(i32.load offset=16 (local.get $p))
-(ptr.store offset=8 (frame.addr 0) (local.get $cb))
+(i32.load offset 16 (local.get $p))
+(ptr.store offset 8 (frame.addr 0) (local.get $cb))
 ```
 
 | Instruction | Stack Type | Memory Bytes | Description |
 |---|---|---|---|
-| `(i32.load [offset=K] [align=A] <ptr>)` | `[ptr] -> [i32]` | 4 | Load 32-bit integer |
+| `(i32.load [offset K] [align A] <ptr>)` | `[ptr] -> [i32]` | 4 | Load 32-bit integer |
 | `(i32.load8_s ... <ptr>)` | `[ptr] -> [i32]` | 1 | Load signed 8-bit integer, sign-extend to `i32` |
 | `(i32.load8_u ... <ptr>)` | `[ptr] -> [i32]` | 1 | Load unsigned 8-bit integer, zero-extend to `i32` |
 | `(i32.load16_s ... <ptr>)` | `[ptr] -> [i32]` | 2 | Load signed 16-bit integer, sign-extend to `i32` |
@@ -456,8 +486,8 @@ Record operations in function bodies:
 | `(alignof $R)` | `(i32.const <align_of_R>)` |
 | `(offsetof $R $f)` | `(i32.const <byte_offset_of_f>)` |
 | `(field.addr $R $f <base_ptr>)` | `(ptr.add <base_ptr> (i32.const <offset>))` (or `<base_ptr>` when offset is `0`) |
-| `(field.get $R $f <base_ptr>)` | `(<load_op> offset=<offset> <base_ptr>)` (using signed/unsigned width of `$f`, e.g. `i32.load8_s` for `i8`, `i32.load8_u` for `u8`) |
-| `(field.set $R $f <base_ptr> <val>)` | `(<store_op> offset=<offset> <base_ptr> <val>)` |
+| `(field.get $R $f <base_ptr>)` | `(<load_op> offset <offset> <base_ptr>)` (using signed/unsigned width of `$f`, e.g. `i32.load8_s` for `i8`, `i32.load8_u` for `u8`) |
+| `(field.set $R $f <base_ptr> <val>)` | `(<store_op> offset <offset> <base_ptr> <val>)` |
 
 ### 7.3 Variadic Functions (`va.start`, `va.count`, `va.arg`)
 

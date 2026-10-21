@@ -30,10 +30,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "0. Building standalone MARV compiler from marv.c (#F / sfc output)..."
-cc -O2 -o "$MARV_BIN" "$ROOT_DIR/marv.c" -lm
+echo "0. Building standalone MARV compiler from m.c r.c v.c a.c (#F / sfc output)..."
+cc -O2 -o "$MARV_BIN" "$ROOT_DIR/m.c" "$ROOT_DIR/r.c" "$ROOT_DIR/v.c" "$ROOT_DIR/a.c" -lm
 cp -f "$MARV_BIN" /home/user/bin/marv 2>/dev/null || true
-echo "  [PASS] Built standalone C binary ($MARV_BIN) from marv.c!"
+echo "  [PASS] Built standalone C binary ($MARV_BIN) from m.c r.c v.c a.c!"
 
 echo ""
 echo "1. Verifying all 13 single-source adapter files in lib/*.c compile under both cc and wcpl..."
@@ -115,7 +115,7 @@ echo "6. Testing configure --prefix and -D PREFIX installation lookup..."
 mkdir -p /tmp/gh_marv_pfx/share/marv/target /tmp/gh_marv_pfx/share/marv/lib
 cp target/*.mvt /tmp/gh_marv_pfx/share/marv/target/
 cp lib/*.mvh lib/*.c /tmp/gh_marv_pfx/share/marv/lib/
-cc -O2 -D PREFIX=/tmp/gh_marv_pfx/share/marv/ -o /tmp/gh_marv_pfx_bin "$ROOT_DIR/marv.c" -lm
+cc -O2 -D PREFIX=/tmp/gh_marv_pfx/share/marv/ -o /tmp/gh_marv_pfx_bin "$ROOT_DIR/m.c" "$ROOT_DIR/r.c" "$ROOT_DIR/v.c" "$ROOT_DIR/a.c" -lm
 (cd /tmp && /tmp/gh_marv_pfx_bin -t cc -o /tmp/gh_marv_pfx_queens "$ROOT_DIR/examples/queens.mvs")
 /tmp/gh_marv_pfx_queens > /tmp/gh_marv_pfx_queens.out
 diff -u /tmp/gh_marv_queens_cc.out /tmp/gh_marv_pfx_queens.out

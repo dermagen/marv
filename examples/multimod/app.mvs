@@ -13,9 +13,9 @@
 
 (module $app
 
-  (data $hdr_line  const align=8 "=== MARV 3-Module Separate Compilation Demo (vec3 + stats + app) ===\x00;")
-  (data $pass_line const align=8 "=== ALL 3-MODULE LINKING CHECKS PASSED ===\x00;")
-  (data $exp_first const align=8 "SAMPLE#3(tag=103,score=35.0)\x00;")
+  (data $hdr_line  const align 8 "=== MARV 3-Module Separate Compilation Demo (vec3 + stats + app) ===\x00;")
+  (data $pass_line const align 8 "=== ALL 3-MODULE LINKING CHECKS PASSED ===\x00;")
+  (data $exp_first const align 8 "SAMPLE#3(tag=103,score=35.0)\x00;")
 
   ;; Callback invoked via `call_indirect` inside `stats.mvs`:
   ;; computes `base_len * base_len + id` so scores are exact integers:

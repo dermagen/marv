@@ -12,8 +12,8 @@
 
   (global $sorted_runs (export "sorted_runs") (mut i32) (i32.const 0))
 
-  (data $tag_label (export "tag_label") const align=8 "SAMPLE\x00;\x00;")
-  (data $fmt_sample const align=8 "%s#%d(tag=%d,score=%.1f)\x00;")
+  (data $tag_label (export "tag_label") const align 8 "SAMPLE\x00;\x00;")
+  (data $fmt_sample const align 8 "%s#%d(tag=%d,score=%.1f)\x00;")
 
   ;; Variadic MARV function: returns `scale * sum(varargs)`
   (func $weighted_sum_va (export "weighted_sum_va")

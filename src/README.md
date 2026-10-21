@@ -2,13 +2,23 @@
 
 The MARV compiler and build driver is provided in two forms:
 
-1. **Standalone C Source (`marv.c` / `src/sf/`)** — Compiled by the [#F (`sfc`)](https://github.com/false-schemers/sharpF) Scheme-to-C compiler from `src/sf/libl.sf` and `src/sf/marv.sf`. Compile `marv.c` in the repository root via `make` or directly with a C compiler:
+1. **Standalone C Sources (`m.c`, `r.c`, `v.c`, `a.c` / `src/sf/`)** — Compiled by the [#F (`sfc`)](https://github.com/false-schemers/sharpF) Scheme-to-C compiler from the four compilation units in `src/sf/`:
+   - `m.sf` — the LibL runtime library (base unit),
+   - `r.sf` — the compiler proper (parser, flattening, emitters),
+   - `v.sf` — interface loading, lowering, target descriptions, and the linker runner,
+   - `a.sf` — the driver (command-line parsing and `main`).
+
+   Compile the generated C files in the repository root via `make` or directly with a C compiler:
    ```sh
-   cc -O2 -o marv marv.c -lm
+   cc -O2 -o marv m.c r.c v.c a.c -lm
    ```
    Or on Windows with MSVC (`cl`):
    ```bat
-   cl /nologo /O2 /Fe:marv.exe marv.c
+   cl /nologo /O2 /Fe:marv.exe m.c r.c v.c a.c
+   ```
+   To regenerate the C sources from `src/sf/` with `sfc` and refresh the copies in the repository root:
+   ```sh
+   cd src/sf && sfc m.sf r.sf v.sf a.sf && cp m.c r.c v.c a.c ../..
    ```
 2. **R7RS Scheme Source (`src/skint/marv.scm`)** — Runs directly as a standard R7RS Scheme program on [Skint](https://github.com/false-schemers/skint):
    ```sh
@@ -91,6 +101,6 @@ marv -T target -t wcpl -o app.wasm \
 
 `marv` maintains three configurable search path lists:
 
-1. **Target Description Directories (`-T`)** — Defaults to `("target/" "<PREFIX>/target")` when `marv.c` is compiled with `-D PREFIX=...` (e.g. `/usr/local/share/marv/` via `Makefile`), or `("target/" "targets/")` if `-D PREFIX` was not given. Searched when resolving `-t TARGDES` to `<dir>/<TARGDES>.mvt` (after checking `<TARGDES>.mvt` directly).
-2. **System Header & Adapter Directories (`-L`)** — Defaults to `("lib/" "<PREFIX>/lib")` when `marv.c` is compiled with `-D PREFIX=...`, or `("lib/" "libs/")` if `-D PREFIX` was not given. Searched when resolving `(include system $foo.bar)` to `<dir>/foo.bar.mvh` and its companion adapter `<dir>/foo.bar.c`.
+1. **Target Description Directories (`-T`)** — Defaults to `("target/" "<PREFIX>/target")` when the compiler is built with `-D PREFIX=...` (e.g. `/usr/local/share/marv/` via `Makefile`), or `("target/" "targets/")` if `-D PREFIX` was not given. Searched when resolving `-t TARGDES` to `<dir>/<TARGDES>.mvt` (after checking `<TARGDES>.mvt` directly).
+2. **System Header & Adapter Directories (`-L`)** — Defaults to `("lib/" "<PREFIX>/lib")` when the compiler is built with `-D PREFIX=...`, or `("lib/" "libs/")` if `-D PREFIX` was not given. Searched when resolving `(include system $foo.bar)` to `<dir>/foo.bar.mvh` and its companion adapter `<dir>/foo.bar.c`.
 3. **Local Header Directories (`-I`, default `("./")`)** — Searched (after the directory of the including file) when resolving `(include $foo.bar)` to `<dir>/foo.bar.mvh`.

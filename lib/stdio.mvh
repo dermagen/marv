@@ -32,7 +32,7 @@
   (const $_IOMYBUF i32 256)
 
   ;; Standard I/O table: 20 * 32-byte FILE slots (`_iob[0..2]` = stdin, stdout, stderr)
-  (data $_iob var align=4 size=640)
+  (data $_iob var align 4 size 640)
 
   (const $stdin  (ref.data $stdio:_iob))
   (const $stdout (ptr.add (ref.data $stdio:_iob) (i32.const 32)))
