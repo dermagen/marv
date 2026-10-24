@@ -829,6 +829,106 @@
 ;; 5. Module Parser (`parse-module`)
 ;; -----------------------------------------------------------------------------
 
+;; ---- native-endian static data (c99 target) ----------------------------
+;; Typed data items ((i16/i32/i64/f32/f64) ...) are abstract numbers:
+;; the c99 target materializes them as typed C arrays in host-native
+;; format, so generated code (native memcpy loads/stores throughout)
+;; is endian-correct on any host and links naturally with C data.
+;; Byte items (strings, (i8 ...), (size ...)) stay raw bytes.  The wo
+;; and rv64g targets keep little-endian byte emission: those machines
+;; are little-endian, so native == little-endian there too.
+(define (c99-run-val i32? v)
+  (c99-format-opnd (list 'imm (if i32? 'i32 'i64) v) #f #f))
+
+;; Static data materialization (cc target).  C gives no way to place
+;; per-run initializers at byte offsets inside one object (a union
+;; initializer selects a single member), so a multi-run segment is an
+;; aliased chain: the segment object itself carries run 0, each later
+;; run is an anchor typedef + alias pointer at its byte offset, and a
+;; generated constructor memcpy's every anchor's typed initializer --
+;; numbers as typed scalars, hence stored in host-native format on
+;; any host -- into the segment image.  Single-run segments are just
+;; the union object with a designated initializer (no constructor).
+;; Byte runs (strings, (i8 ...), (size ...)) stay raw bytes from the
+;; little-endian byte image; MARV_DS_TAIL pads the last link's view.
+(define (c99-data-run-type r)
+  (case (car r)
+    ((raw bytes) "uint8_t")
+    ((i16) "int16_t")   ((u16) "uint16_t")
+    ((i32) "int32_t")   ((u32) "uint32_t")
+    ((i64) "int64_t")   ((u64) "uint64_t")
+    ((f32) "marv_f32")  ((f64) "marv_f64")
+    ((ptr) "marv_ptr")
+    (else (error "c99-data-run-type: bad run" r))))
+
+;; scalar initializer strings for a run, or #f for byte/ptr runs
+(define (c99-data-run-vals r)
+  (case (car r)
+    ((i16 u16 i32 u32) (map (lambda (v) (c99-run-val #t v)) (cdr r)))
+    ((i64 u64)         (map (lambda (v) (c99-run-val #f v)) (cdr r)))
+    ((f32) (map (lambda (v)
+                  (string-append "((marv_f32)" (flonum->hex-literal v) ")"))
+                (cdr r)))
+    ((f64) (map flonum->hex-literal (cdr r)))
+    (else #f)))
+
+;; item size in bytes (typed scalar or 1 for bytes/size runs)
+(define (c99-run-elem-size r)
+  (case (car r)
+    ((i16 u16) 2)
+    ((i32 u32 f32) 4)
+    ((i64 u64 f64 ptr) 8)
+    (else 1)))
+
+;; number of elements in a run (a raw run stores its byte count)
+(define (c99-run-count r)
+  (if (eq? (car r) 'raw) (cadr r) (length (cdr r))))
+
+;; Re-derive the run structure of a data segment from its source items
+;; (data record slot 7).  Mirrors expand-data-items offset accounting,
+;; including (ptr ...) slot lists; relocations are recomputed by the
+;; caller of the cc emitter from slot 6, so they are not returned here.
+(define (expand-data-runs items)
+  (let loop ((rest items) (runs '()) (cur-off 0))
+    (if (null? rest)
+        (reverse runs)
+        (let ((it (car rest)))
+          (cond
+            ((string? it)
+             (loop (cdr rest)
+                   (cons (list 'raw (string-length it)) runs)
+                   (+ cur-off (string-length it))))
+            ((bytevector? it)
+             (loop (cdr rest)
+                   (cons (list 'raw (bytevector-length it)) runs)
+                   (+ cur-off (bytevector-length it))))
+            ((and (pair? it) (memq (car it) '(size zero)))
+             (loop (cdr rest)
+                   (cons (list 'raw (cadr it)) runs)
+                   (+ cur-off (cadr it))))
+            ((and (pair? it) (memq (car it) '(i8 u8)))
+             (loop (cdr rest)
+                   (cons (cons 'bytes (cdr it)) runs)
+                   (+ cur-off (length (cdr it)))))
+            ((and (pair? it) (memq (car it) '(i16 u16 i32 u32 i64 u64 f32 f64)))
+             (loop (cdr rest)
+                   (cons it runs)
+                   (+ cur-off (* (length (cdr it))
+                                 (case (car it)
+                                   ((i16 u16) 2) ((i32 u32 f32) 4)
+                                   (else 8))))))
+            ((and (pair? it)
+                  (or (eq? (car it) 'ref.data) (eq? (car it) 'ref)
+                      (eq? (car it) 'ref.func)))
+             (loop (cdr rest)
+                   (cons (list 'ptr 1) runs)
+                   (+ cur-off 8)))
+            ((and (pair? it) (eq? (car it) 'ptr))
+             (loop (cdr rest)
+                   (cons (list 'ptr (length (cdr it))) runs)
+                   (+ cur-off (* 8 (length (cdr it))))))
+            (else (error "unsupported item in (data ...)" it)))))))
+
 ;; Expand data items into (bytes-list . relocs-list)
 ;; where each reloc is: (kind sym sym-offset byte-offset-in-segment)
 ;; Note: (ref.data $sym [off]) and (ref.func $sym) always occupy an 8-byte slot!
@@ -868,12 +968,27 @@
                     (bs (apply append (map (lambda (v) (int->le-bytes v 2)) vals))))
                (loop (cdr rest) (cons bs bytes) relocs (+ cur-off (length bs)))))
 
+            ((and (pair? it) (eq? (car it) 'u16))
+             (let* ((vals (cdr it))
+                    (bs (apply append (map (lambda (v) (int->le-bytes v 2)) vals))))
+               (loop (cdr rest) (cons bs bytes) relocs (+ cur-off (length bs)))))
+
             ((and (pair? it) (eq? (car it) 'i32))
              (let* ((vals (cdr it))
                     (bs (apply append (map (lambda (v) (int->le-bytes v 4)) vals))))
                (loop (cdr rest) (cons bs bytes) relocs (+ cur-off (length bs)))))
 
+            ((and (pair? it) (eq? (car it) 'u32))
+             (let* ((vals (cdr it))
+                    (bs (apply append (map (lambda (v) (int->le-bytes v 4)) vals))))
+               (loop (cdr rest) (cons bs bytes) relocs (+ cur-off (length bs)))))
+
             ((and (pair? it) (eq? (car it) 'i64))
+             (let* ((vals (cdr it))
+                    (bs (apply append (map (lambda (v) (int->le-bytes v 8)) vals))))
+               (loop (cdr rest) (cons bs bytes) relocs (+ cur-off (length bs)))))
+
+            ((and (pair? it) (eq? (car it) 'u64))
              (let* ((vals (cdr it))
                     (bs (apply append (map (lambda (v) (int->le-bytes v 8)) vals))))
                (loop (cdr rest) (cons bs bytes) relocs (+ cur-off (length bs)))))
@@ -887,6 +1002,34 @@
              (let* ((vals (cdr it))
                     (bs (apply append (map (lambda (v) (int->le-bytes (flonum->ieee64-bits v) 8)) vals))))
                (loop (cdr rest) (cons bs bytes) relocs (+ cur-off (length bs)))))
+
+            ;; (ptr v ...): 8-byte pointer slots; each v is 0, a data
+            ;; symbol, (ref.data $sym [off]) or (ref.func $sym)
+            ((and (pair? it) (eq? (car it) 'ptr))
+             (let ploop2 ((vs (cdr it)) (bs '()) (rl '()) (off cur-off))
+               (cond
+                 ((null? vs)
+                  (loop (cdr rest) (cons (apply append (reverse bs)) bytes)
+                        (append rl relocs) off))
+                 ((or (eq? (car vs) 0)
+                      (and (pair? (car vs)) (eq? (caar vs) 'ptr.null)))
+                  (ploop2 (cdr vs) (cons (make-list 8 0) bs) rl (+ off 8)))
+                 ((symbol? (car vs))
+                  (ploop2 (cdr vs) (cons (make-list 8 0) bs)
+                          (cons (list 'ref.data (car vs) 0 off) rl) (+ off 8)))
+                 ((and (pair? (car vs)) (eq? (caar vs) 'ref.data))
+                  (ploop2 (cdr vs) (cons (make-list 8 0) bs)
+                          (cons (list 'ref.data (cadar vs)
+                                      (if (pair? (cddar vs)) (caddar vs) 0)
+                                      off)
+                                rl)
+                          (+ off 8)))
+                 ((and (pair? (car vs)) (eq? (caar vs) 'ref.func))
+                  (ploop2 (cdr vs) (cons (make-list 8 0) bs)
+                          (cons (list 'ref.func (cadar vs) 0 off) rl)
+                                (+ off 8)))
+                 (else (error "unsupported value in (ptr ...) data item"
+                              (car vs))))))
 
             ;; Uniform 8-byte pointer slot in static data:
             ((and (pair? it) (or (eq? (car it) 'ref.data) (eq? (car it) 'ref)))
@@ -982,7 +1125,7 @@
                    ((attr-value r2 'align) => (lambda (p) (cdr p)))
                    (else r2)))
          (expanded (expand-data-items r3)))
-    (list 'data name export-name mut align (car expanded) (cdr expanded))))
+    (list 'data name export-name mut align (car expanded) (cdr expanded) r3)))
 
 ;; Parse a (global ...) form
 (define (parse-global form)
@@ -2019,9 +2162,19 @@
 (define (c99-func-cname mname fn-sym export-name)
   (if export-name
       (if (string=? export-name "main")
-          "main"
+          "MARV_MAIN_FN"
           (import-c-sym (strip-dollar mname) export-name))
       (asm-ident mname fn-sym)))
+
+;; The C entry point is stricter than MARV's (i32, ptr) shape: hosted
+;; C99 (and Clang in particular) requires `int main(int, char **)`.
+;; When a function is exported as "main", a ptr parameter is therefore
+;; declared `char **` (marv_i32 is int32_t == int, so the rest of the
+;; signature already conforms).
+(define (c99-param-type exp ptype)
+  (if (and exp (string=? exp "main") (eq? ptype 'ptr))
+      "char **"
+      (c99-type ptype)))
 
 (define (import-c-sym imod iname)
   (let* ((cm (c-ident imod))
@@ -2035,6 +2188,7 @@
   (or (eq? sym dsym)
       (string=? (strip-dollar sym) (strip-dollar dsym))
       (string=? (strip-dollar sym) iname)))
+
 
 (define *marv-c99-header*
 "/* MARV Restricted C99 Runtime & Intrinsics */
@@ -2087,15 +2241,262 @@ typedef union marv_va_arg {
 #define MARV_UNUSED
 #endif
 
+/* Static data segments are unions of per-run arrays (see the data
+   section of the emitter): MARV_DSZ(n) is the run array bound.
+   A union of arrays needs a positive bound, so an empty run still
+   occupies one element; the surplus bytes sit past every offset the
+   program can compute and are never addressed.  (On ANSI compilers
+   without zero-length-array extensions this is also the portable
+   way to say 'possibly empty'.) */
+#define MARV_DSZ(n) ((n) > 0 ? (n) : 1)
+
+/* static-data anchor tail: the final anchor's byte view runs out to
+   the end of its own object (255 is just an upper bound on the view;
+   an anchor union's size is the max of its members, and anchors are
+   memcpy sources, never sized by the view).  The segment object
+   itself is sized by its own byte member, which spans the whole
+   segment; do NOT cap it by this value. */
+#define MARV_DS_TAIL 255
+
 #if defined(__has_attribute)
-#  if __has_attribute(musttail)
+#  if __has_attribute(musttail) && (defined(MARV_NO_TRAMPOLINE) || !(defined(__powerpc64__) && (!defined(_CALL_ELF) || (_CALL_ELF == 1))))
 #    define MARV_MUSTTAIL __attribute__((musttail))
+#    define MARV_TAILCALL_GUARANTEE 1
 #  else
 #    define MARV_MUSTTAIL
 #  endif
 #else
 #  define MARV_MUSTTAIL
 #endif
+
+/* Chained code (the converters emit modules whose functions transfer
+   control with MARV_MUSTTAIL returns) needs those returns to become
+   jumps, or the C stack grows by one frame per transfer until it
+   overflows.  Three configurations, Skint-style:
+     MARV_TAILCALL_GUARANTEE -- musttail is honoured; plain chain.
+     MARV_TRAMPOLINE (default when there is no guarantee) -- unit
+       transfers are fuel-checked; when the fuel runs out the transfer
+       stashes the chain registers in the marv_tc_* shadows below and
+       returns, unwinding to a driver loop at main that re-enters the
+       target.  The C stack is then bounded by MARV_TC_FUEL frames.
+     MARV_NO_TRAMPOLINE (user-defined) -- trust the compiler's plain
+       sibling-call heuristics; historical shape, no checks.
+   The guarantee is withheld on PowerPC64 ELFv1 (function descriptors
+   with a per-function TOC in r2) even when musttail exists: clang
+   refuses indirect musttail calls on PPC outright, and GCC before 15
+   has no musttail and silently declines to sibling-call indirect or
+   cross-TU calls there.  Trampoline mode is the safe default for
+   that ABI; ELFv2 has no per-function TOC and keeps the guarantee.
+   Defining MARV_NO_TRAMPOLINE on ELFv1 re-enables musttail there:
+   the compiler then either honours it or refuses to compile (clang),
+   never silently miscompiles. */
+#if !defined(MARV_TAILCALL_GUARANTEE) && !defined(MARV_NO_TRAMPOLINE)
+#  define MARV_TRAMPOLINE 1
+#endif
+
+#ifdef MARV_TRAMPOLINE
+#  ifndef MARV_TC_FUEL
+#    define MARV_TC_FUEL 512
+#  endif
+#  ifndef MARV_TC_STATE_DEFINED
+/* Resume state (shadow chain registers): a transfer that finds the
+   fuel exhausted stores its target and arguments here and returns;
+   the driver loop at main reloads and re-enters.  Generated code
+   refers only to the marv_tc_* names. */
+/* The resume slots are a signature-agnostic array: slot 0 is the
+   target function pointer bit-cast to an integer, slot 1 the pending
+   flag, the remaining slots the callee's arguments in order, each
+   zero-extended to 64 bits (pointers via uintptr_t).  Two chain
+   signatures are supported (the two converters' unit shapes):
+   DS  (i64 i64 i64 i64 ptr ptr i32) -> ptr   -- uses slots 3..9
+   CPS (ptr i64 ptr ptr i32) -> ptr           -- uses slots 3..7
+   The driver dispatches on the number of stashed arguments. */
+/* Definitions live in exactly one translation unit of a program:
+   in link mode the driver keeps them in the first .mvs module (or
+   in a raw C input that already carries them, in which case every
+   .mvs module gets the externs above); split pieces k>0 also get
+   externs. */
+extern marv_i64 marv_tc_fuel;
+extern marv_i64 marv_tc_state[16];
+#  endif
+#  define MARV_MAIN_FN marv_main_impl
+#else
+#  define MARV_MAIN_FN main
+#endif
+
+/* Macro form of the MARV C99 intrinsics.  The expression macros use
+   GNU statement expressions where a helper needs a temporary, so each
+   argument is evaluated exactly once, just as with the old inline
+   functions.  The fallback path for other compilers is below. */
+#if defined(__GNUC__) || defined(__clang__)
+#define marv_ptr_add(p, off) ((marv_ptr)((uint8_t*)(p) + (intptr_t)(off)))
+#define marv_ptr_add64(p, off) ((marv_ptr)((uint8_t*)(p) + (intptr_t)(off)))
+#define marv_ptr_sub(p, off) ((marv_ptr)((uint8_t*)(p) - (intptr_t)(off)))
+#define marv_ptr_diff(p1, p2) ((marv_i32)((const uint8_t*)(p1) - (const uint8_t*)(p2)))
+#define marv_ptr_diff64(p1, p2) ((marv_i64)((const uint8_t*)(p1) - (const uint8_t*)(p2)))
+#define marv_ptr_eqz(p) ((p) == NULL ? 1 : 0)
+#define marv_ptr_eq(a, b) ((a) == (b) ? 1 : 0)
+#define marv_ptr_ne(a, b) ((a) != (b) ? 1 : 0)
+#define marv_ptr_lt_u(a, b) ((uintptr_t)(a) < (uintptr_t)(b) ? 1 : 0)
+#define marv_ptr_gt_u(a, b) ((uintptr_t)(a) > (uintptr_t)(b) ? 1 : 0)
+#define marv_ptr_le_u(a, b) ((uintptr_t)(a) <= (uintptr_t)(b) ? 1 : 0)
+#define marv_ptr_ge_u(a, b) ((uintptr_t)(a) >= (uintptr_t)(b) ? 1 : 0)
+#define marv_ptr_of_i64(v) ((marv_ptr)(uintptr_t)(uint64_t)(v))
+#define marv_i64_of_ptr(p) ((marv_i64)(uint64_t)(uintptr_t)(p))
+#define marv_ptr_load(base, offset) __extension__({ marv_ptr _b = (base); marv_i64 _o = (offset); uint64_t _s = 0; memcpy(&_s, (const uint8_t*)_b + _o, 8); (marv_ptr)(uintptr_t)_s; })
+#define marv_ptr_store(base, offset, val) do { marv_ptr _b = (base); marv_i64 _o = (offset); uint64_t _s = (uint64_t)(uintptr_t)(val); memcpy((uint8_t*)_b + _o, &_s, 8); } while (0)
+#define marv_i32_load(base, off) __extension__({ marv_i32 _v; memcpy(&_v, (const uint8_t*)(base) + (off), 4); _v; })
+#define marv_i32_load8_s(base, off) __extension__({ int8_t _v; memcpy(&_v, (const uint8_t*)(base) + (off), 1); (marv_i32)_v; })
+#define marv_i32_load8_u(base, off) __extension__({ uint8_t _v; memcpy(&_v, (const uint8_t*)(base) + (off), 1); (marv_i32)_v; })
+#define marv_i32_load16_s(base, off) __extension__({ int16_t _v; memcpy(&_v, (const uint8_t*)(base) + (off), 2); (marv_i32)_v; })
+#define marv_i32_load16_u(base, off) __extension__({ uint16_t _v; memcpy(&_v, (const uint8_t*)(base) + (off), 2); (marv_i32)_v; })
+#define marv_i64_load(base, off) __extension__({ marv_i64 _v; memcpy(&_v, (const uint8_t*)(base) + (off), 8); _v; })
+#define marv_i64_load8_s(base, off) __extension__({ int8_t _v; memcpy(&_v, (const uint8_t*)(base) + (off), 1); (marv_i64)_v; })
+#define marv_i64_load8_u(base, off) __extension__({ uint8_t _v; memcpy(&_v, (const uint8_t*)(base) + (off), 1); (marv_i64)_v; })
+#define marv_i64_load16_s(base, off) __extension__({ int16_t _v; memcpy(&_v, (const uint8_t*)(base) + (off), 2); (marv_i64)_v; })
+#define marv_i64_load16_u(base, off) __extension__({ uint16_t _v; memcpy(&_v, (const uint8_t*)(base) + (off), 2); (marv_i64)_v; })
+#define marv_i64_load32_s(base, off) __extension__({ int32_t _v; memcpy(&_v, (const uint8_t*)(base) + (off), 4); (marv_i64)_v; })
+#define marv_i64_load32_u(base, off) __extension__({ uint32_t _v; memcpy(&_v, (const uint8_t*)(base) + (off), 4); (marv_i64)_v; })
+#define marv_f32_load(base, off) __extension__({ marv_f32 _v; memcpy(&_v, (const uint8_t*)(base) + (off), 4); _v; })
+#define marv_f64_load(base, off) __extension__({ marv_f64 _v; memcpy(&_v, (const uint8_t*)(base) + (off), 8); _v; })
+#define marv_i32_store(base, off, v) do { marv_i32 _v = (v); memcpy((uint8_t*)(base) + (off), &_v, 4); } while (0)
+#define marv_i32_store8(base, off, v) do { uint8_t _v = (uint8_t)(v); memcpy((uint8_t*)(base) + (off), &_v, 1); } while (0)
+#define marv_i32_store16(base, off, v) do { uint16_t _v = (uint16_t)(v); memcpy((uint8_t*)(base) + (off), &_v, 2); } while (0)
+#define marv_i64_store(base, off, v) do { marv_i64 _v = (v); memcpy((uint8_t*)(base) + (off), &_v, 8); } while (0)
+#define marv_i64_store8(base, off, v) do { uint8_t _v = (uint8_t)(v); memcpy((uint8_t*)(base) + (off), &_v, 1); } while (0)
+#define marv_i64_store16(base, off, v) do { uint16_t _v = (uint16_t)(v); memcpy((uint8_t*)(base) + (off), &_v, 2); } while (0)
+#define marv_i64_store32(base, off, v) do { uint32_t _v = (uint32_t)(v); memcpy((uint8_t*)(base) + (off), &_v, 4); } while (0)
+#define marv_f32_store(base, off, v) do { marv_f32 _v = (v); memcpy((uint8_t*)(base) + (off), &_v, 4); } while (0)
+#define marv_f64_store(base, off, v) do { marv_f64 _v = (v); memcpy((uint8_t*)(base) + (off), &_v, 8); } while (0)
+#define marv_i32_add(a, b) ((marv_i32)((marv_u32)(a) + (marv_u32)(b)))
+#define marv_i32_sub(a, b) ((marv_i32)((marv_u32)(a) - (marv_u32)(b)))
+#define marv_i32_mul(a, b) ((marv_i32)((marv_u32)(a) * (marv_u32)(b)))
+#define marv_i32_div_s(a, b) ((a) / (b))
+#define marv_i32_div_u(a, b) ((marv_i32)((marv_u32)(a) / (marv_u32)(b)))
+#define marv_i32_rem_s(a, b) ((a) % (b))
+#define marv_i32_rem_u(a, b) ((marv_i32)((marv_u32)(a) % (marv_u32)(b)))
+#define marv_i32_and(a, b) ((a) & (b))
+#define marv_i32_or(a, b) ((a) | (b))
+#define marv_i32_xor(a, b) ((a) ^ (b))
+#define marv_i32_shl(a, b) ((marv_i32)((marv_u32)(a) << ((b) & 31)))
+#define marv_i32_shr_s(a, b) ((a) >> ((b) & 31))
+#define marv_i32_shr_u(a, b) ((marv_i32)((marv_u32)(a) >> ((b) & 31)))
+#define marv_i32_rotl(a, b) __extension__({ marv_u32 _u = (marv_u32)(a); marv_u32 _k = (marv_u32)(b) & 31u; (marv_i32)((_u << _k) | (_u >> ((32u - _k) & 31u))); })
+#define marv_i32_rotr(a, b) __extension__({ marv_u32 _u = (marv_u32)(a); marv_u32 _k = (marv_u32)(b) & 31u; (marv_i32)((_u >> _k) | (_u << ((32u - _k) & 31u))); })
+#define marv_i32_clz(a) __extension__({ marv_i32 _a = (a); _a == 0 ? 32 : (marv_i32)__builtin_clz((marv_u32)_a); })
+#define marv_i32_ctz(a) __extension__({ marv_i32 _a = (a); _a == 0 ? 32 : (marv_i32)__builtin_ctz((marv_u32)_a); })
+#define marv_i32_popcnt(a) ((marv_i32)__builtin_popcount((marv_u32)(a)))
+#define marv_i32_eqz(a) ((a) == 0 ? 1 : 0)
+#define marv_i32_eq(a, b) ((a) == (b) ? 1 : 0)
+#define marv_i32_ne(a, b) ((a) != (b) ? 1 : 0)
+#define marv_i32_lt_s(a, b) ((a) < (b) ? 1 : 0)
+#define marv_i32_lt_u(a, b) ((marv_u32)(a) < (marv_u32)(b) ? 1 : 0)
+#define marv_i32_gt_s(a, b) ((a) > (b) ? 1 : 0)
+#define marv_i32_gt_u(a, b) ((marv_u32)(a) > (marv_u32)(b) ? 1 : 0)
+#define marv_i32_le_s(a, b) ((a) <= (b) ? 1 : 0)
+#define marv_i32_le_u(a, b) ((marv_u32)(a) <= (marv_u32)(b) ? 1 : 0)
+#define marv_i32_ge_s(a, b) ((a) >= (b) ? 1 : 0)
+#define marv_i32_ge_u(a, b) ((marv_u32)(a) >= (marv_u32)(b) ? 1 : 0)
+#define marv_i64_add(a, b) ((marv_i64)((marv_u64)(a) + (marv_u64)(b)))
+#define marv_i64_sub(a, b) ((marv_i64)((marv_u64)(a) - (marv_u64)(b)))
+#define marv_i64_mul(a, b) ((marv_i64)((marv_u64)(a) * (marv_u64)(b)))
+#define marv_i64_div_s(a, b) ((a) / (b))
+#define marv_i64_div_u(a, b) ((marv_i64)((marv_u64)(a) / (marv_u64)(b)))
+#define marv_i64_rem_s(a, b) ((a) % (b))
+#define marv_i64_rem_u(a, b) ((marv_i64)((marv_u64)(a) % (marv_u64)(b)))
+#define marv_i64_and(a, b) ((a) & (b))
+#define marv_i64_or(a, b) ((a) | (b))
+#define marv_i64_xor(a, b) ((a) ^ (b))
+#define marv_i64_shl(a, b) ((marv_i64)((marv_u64)(a) << ((b) & 63)))
+#define marv_i64_shr_s(a, b) ((a) >> ((b) & 63))
+#define marv_i64_shr_u(a, b) ((marv_i64)((marv_u64)(a) >> ((b) & 63)))
+#define marv_i64_rotl(a, b) __extension__({ marv_u64 _u = (marv_u64)(a); marv_u64 _k = (marv_u64)(b) & 63u; (marv_i64)((_u << _k) | (_u >> ((64u - _k) & 63u))); })
+#define marv_i64_rotr(a, b) __extension__({ marv_u64 _u = (marv_u64)(a); marv_u64 _k = (marv_u64)(b) & 63u; (marv_i64)((_u >> _k) | (_u << ((64u - _k) & 63u))); })
+#define marv_i64_clz(a) __extension__({ marv_i64 _a = (a); _a == 0 ? 64 : (marv_i64)__builtin_clzll((marv_u64)_a); })
+#define marv_i64_ctz(a) __extension__({ marv_i64 _a = (a); _a == 0 ? 64 : (marv_i64)__builtin_ctzll((marv_u64)_a); })
+#define marv_i64_popcnt(a) ((marv_i64)__builtin_popcountll((marv_u64)(a)))
+#define marv_i64_eqz(a) ((marv_i32)((a) == 0 ? 1 : 0))
+#define marv_i64_eq(a, b) ((a) == (b) ? 1 : 0)
+#define marv_i64_ne(a, b) ((a) != (b) ? 1 : 0)
+#define marv_i64_lt_s(a, b) ((a) < (b) ? 1 : 0)
+#define marv_i64_lt_u(a, b) ((marv_u64)(a) < (marv_u64)(b) ? 1 : 0)
+#define marv_i64_gt_s(a, b) ((a) > (b) ? 1 : 0)
+#define marv_i64_gt_u(a, b) ((marv_u64)(a) > (marv_u64)(b) ? 1 : 0)
+#define marv_i64_le_s(a, b) ((a) <= (b) ? 1 : 0)
+#define marv_i64_le_u(a, b) ((marv_u64)(a) <= (marv_u64)(b) ? 1 : 0)
+#define marv_i64_ge_s(a, b) ((a) >= (b) ? 1 : 0)
+#define marv_i64_ge_u(a, b) ((marv_u64)(a) >= (marv_u64)(b) ? 1 : 0)
+#define marv_f32_add(a, b) ((a) + (b))
+#define marv_f32_sub(a, b) ((a) - (b))
+#define marv_f32_mul(a, b) ((a) * (b))
+#define marv_f32_div(a, b) ((a) / (b))
+#define marv_f32_sqrt(a) (sqrtf(a))
+#define marv_f32_abs(a) (fabsf(a))
+#define marv_f32_neg(a) (-(a))
+#define marv_f32_copysign(a, b) (copysignf((a), (b)))
+#define marv_f32_ceil(a) (ceilf(a))
+#define marv_f32_floor(a) (floorf(a))
+#define marv_f32_trunc(a) (truncf(a))
+#define marv_f32_nearest(a) (rintf(a))
+#define marv_f32_min(a, b) (fminf((a), (b)))
+#define marv_f32_max(a, b) (fmaxf((a), (b)))
+#define marv_f32_eq(a, b) ((a) == (b) ? 1 : 0)
+#define marv_f32_ne(a, b) ((a) != (b) ? 1 : 0)
+#define marv_f32_lt(a, b) ((a) < (b) ? 1 : 0)
+#define marv_f32_gt(a, b) ((a) > (b) ? 1 : 0)
+#define marv_f32_le(a, b) ((a) <= (b) ? 1 : 0)
+#define marv_f32_ge(a, b) ((a) >= (b) ? 1 : 0)
+#define marv_f64_add(a, b) ((a) + (b))
+#define marv_f64_sub(a, b) ((a) - (b))
+#define marv_f64_mul(a, b) ((a) * (b))
+#define marv_f64_div(a, b) ((a) / (b))
+#define marv_f64_sqrt(a) (sqrt(a))
+#define marv_f64_abs(a) (fabs(a))
+#define marv_f64_neg(a) (-(a))
+#define marv_f64_copysign(a, b) (copysign((a), (b)))
+#define marv_f64_ceil(a) (ceil(a))
+#define marv_f64_floor(a) (floor(a))
+#define marv_f64_trunc(a) (trunc(a))
+#define marv_f64_nearest(a) (rint(a))
+#define marv_f64_min(a, b) (fmin((a), (b)))
+#define marv_f64_max(a, b) (fmax((a), (b)))
+#define marv_f64_eq(a, b) ((a) == (b) ? 1 : 0)
+#define marv_f64_ne(a, b) ((a) != (b) ? 1 : 0)
+#define marv_f64_lt(a, b) ((a) < (b) ? 1 : 0)
+#define marv_f64_gt(a, b) ((a) > (b) ? 1 : 0)
+#define marv_f64_le(a, b) ((a) <= (b) ? 1 : 0)
+#define marv_f64_ge(a, b) ((a) >= (b) ? 1 : 0)
+#define marv_i32_wrap_i64(a) ((marv_i32)(marv_u32)(marv_u64)(a))
+#define marv_i64_extend_i32_s(a) ((marv_i64)(a))
+#define marv_i64_extend_i32_u(a) ((marv_i64)(marv_u32)(a))
+#define marv_i32_extend8_s(a) ((marv_i32)(int8_t)(a))
+#define marv_i32_extend16_s(a) ((marv_i32)(int16_t)(a))
+#define marv_i64_extend8_s(a) ((marv_i64)(int8_t)(a))
+#define marv_i64_extend16_s(a) ((marv_i64)(int16_t)(a))
+#define marv_i64_extend32_s(a) ((marv_i64)(int32_t)(a))
+#define marv_i32_trunc_f32_s(a) ((marv_i32)(a))
+#define marv_i32_trunc_f32_u(a) ((marv_i32)(marv_u32)(a))
+#define marv_i32_trunc_f64_s(a) ((marv_i32)(a))
+#define marv_i32_trunc_f64_u(a) ((marv_i32)(marv_u32)(a))
+#define marv_i64_trunc_f32_s(a) ((marv_i64)(a))
+#define marv_i64_trunc_f32_u(a) ((marv_i64)(marv_u64)(a))
+#define marv_i64_trunc_f64_s(a) ((marv_i64)(a))
+#define marv_i64_trunc_f64_u(a) ((marv_i64)(marv_u64)(a))
+#define marv_f32_convert_i32_s(a) ((marv_f32)(a))
+#define marv_f32_convert_i32_u(a) ((marv_f32)(marv_u32)(a))
+#define marv_f32_convert_i64_s(a) ((marv_f32)(a))
+#define marv_f32_convert_i64_u(a) ((marv_f32)(marv_u64)(a))
+#define marv_f32_demote_f64(a) ((marv_f32)(a))
+#define marv_f64_convert_i32_s(a) ((marv_f64)(a))
+#define marv_f64_convert_i32_u(a) ((marv_f64)(marv_u32)(a))
+#define marv_f64_convert_i64_s(a) ((marv_f64)(a))
+#define marv_f64_convert_i64_u(a) ((marv_f64)(marv_u64)(a))
+#define marv_f64_promote_f32(a) ((marv_f64)(a))
+#define marv_i32_reinterpret_f32(a) __extension__({ marv_f32 _a = (a); marv_i32 _r; memcpy(&_r, &_a, 4); _r; })
+#define marv_i64_reinterpret_f64(a) __extension__({ marv_f64 _a = (a); marv_i64 _r; memcpy(&_r, &_a, 8); _r; })
+#define marv_f32_reinterpret_i32(a) __extension__({ marv_i32 _a = (a); marv_f32 _r; memcpy(&_r, &_a, 4); _r; })
+#define marv_f64_reinterpret_i64(a) __extension__({ marv_i64 _a = (a); marv_f64 _r; memcpy(&_r, &_a, 8); _r; })
+#else
 
 static inline marv_ptr marv_ptr_add(marv_ptr p, marv_i32 off) {
   return (marv_ptr)((uint8_t*)p + (intptr_t)off);
@@ -2422,6 +2823,8 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
   marv_f64 r; memcpy(&r, &a, 8); return r;
 }
 
+#endif
+
 #endif /* MARV_H_ */
 
 ")
@@ -2432,8 +2835,7 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
          (globals (mod-globals mod))
          (datas (mod-datas mod))
          (funcs (mod-funcs mod))
-         (fsigs (build-func-sig-table mod))
-         (ir-funcs (map (lambda (fn) (unstack-func mod fn)) funcs)))
+         (fsigs (build-func-sig-table mod)))
 
     (define (resolve-c-func-sym sym)
       (let ((entry (lookup-sym-entry sym fsigs)))
@@ -2482,7 +2884,24 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
           (else (iloop (cdr imps))))))
 
     (fprintf port "/* Generated by MARV Compiler (Restricted C99 Target) */~%")
+    ;; Trampoline resume state is program-global (one definition per
+    ;; program, owned by the first link-mode module; -c output never
+    ;; owns it and refers to the extern declarations in the header).
+    ;; The driver (a.sf) sets the bit above before compiling the
+    ;; first .mvs of a link; reset it here, after marking one module.
     (display *marv-c99-header* port)
+
+    ;; Trampoline resume state definitions (declared in the header).
+    ;; Emitted as module-global-shaped definitions so split output
+    ;; shares them like globals: definition in piece 0, extern
+    ;; declarations in the other pieces.
+    ;; Trampoline fuel definition (declared in the header): one per
+    ;; program: one definition per program is kept by the link-mode
+    ;; driver (module 0); marv_tc_state is zero-initialised (BSS).
+    (fprintf port "#ifdef MARV_TRAMPOLINE~%")
+    (fprintf port "marv_i64 marv_tc_fuel = MARV_TC_FUEL;~%")
+    (fprintf port "marv_i64 marv_tc_state[16];~%")
+    (fprintf port "#endif~%")
 
     ;; 1. Imported declarations (all follow MARV-ABI `<mod>_<name>` convention)
     (for-each
@@ -2511,7 +2930,7 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
            (let ((imod  (list-ref imp 1))
                  (iname (list-ref imp 2))
                  (sz    (list-ref imp 6)))
-             (fprintf port "extern uint8_t ~a[~a];~%" (import-c-sym imod iname) (max 1 sz))))))
+             (fprintf port "extern uint8_t ~a[];~%" (import-c-sym imod iname))))))
       imports)
 
     ;; 2. Forward declarations for module functions
@@ -2529,7 +2948,7 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
               (let ploop ((ps params) (first? #t))
                 (when (pair? ps)
                   (when (not first?) (fprintf port ", "))
-                  (fprintf port "~a ~a" (c99-type (cdar ps)) (c-ident (caar ps)))
+                  (fprintf port "~a ~a" (c99-param-type exp (cdar ps)) (c-ident (caar ps)))
                   (ploop (cdr ps) #f))))
           (fprintf port ");~%")
           (when (and exp (not (string=? exp "main")))
@@ -2544,7 +2963,7 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
                     (let ploop ((ps params) (first? #t))
                       (when (pair? ps)
                         (when (not first?) (fprintf port ", "))
-                        (fprintf port "~a ~a" (c99-type (cdar ps)) (c-ident (caar ps)))
+                        (fprintf port "~a ~a" (c99-param-type exp (cdar ps)) (c-ident (caar ps)))
                         (ploop (cdr ps) #f))))
                 (fprintf port ");~%"))))))
       funcs)
@@ -2566,6 +2985,13 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
       globals)
 
     ;; 4. Static Data Segments
+    ;; Each run is a chain link: a union whose _t member holds the
+    ;; run's initializer -- numbers as typed scalars, hence stored in
+    ;; host-native format on any host -- and whose _b byte view
+    ;; continues the segment image for the next link (see c99-data-run
+    ;; helpers).  Byte/zero runs stay raw bytes; pointer slots are
+    ;; filled by the reloc constructor below.  One segment symbol and
+    ;; unchanged byte offsets throughout.
     (for-each
       (lambda (d)
         (let* ((dname (list-ref d 1))
@@ -2574,14 +3000,72 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
                (bytes (list-ref d 5))
                (cname (resolve-c-data-sym dname)))
           (when (not exp) (fprintf port "static "))
-          (fprintf port "MARV_ALIGNED(~a) uint8_t ~a[~a] = {"
-                   align cname (max 1 (length bytes)))
-          (let bloop ((bs bytes) (first? #t))
-            (when (pair? bs)
-              (when (not first?) (fprintf port ","))
-              (fprintf port "~a" (car bs))
-              (bloop (cdr bs) #f)))
-          (fprintf port "};~%")))
+          (if (and (pair? bytes) (every (lambda (b) (= b 0)) bytes))
+              ;; all-zero segment: C zero-initializes static storage
+              (fprintf port "MARV_ALIGNED(~a) uint8_t ~a[~a];~%"
+                       align cname (length bytes))
+              (let ((runs (expand-data-runs (list-ref d 7)))
+                     (total (length bytes)))
+                (define (emit-run-init r bs)
+                  (let ((vals (c99-data-run-vals r)))
+                    (if vals
+                        (let vloop ((vs vals) (f2? #t))
+                          (when (pair? vs)
+                            (when (not f2?) (fprintf port ","))
+                            (fprintf port "~a" (car vs))
+                            (vloop (cdr vs) #f)))
+                        (let ((nbytes (* (c99-run-count r)
+                                         (c99-run-elem-size r))))
+                          (let wloop ((m 0) (f2? #t))
+                            (when (< m nbytes)
+                              (when (not f2?) (fprintf port ","))
+                              (fprintf port "~a" (list-ref bs m))
+                              (wloop (+ m 1) #f)))))))
+                (define (run-size r)
+                  (* (c99-run-count r) (c99-run-elem-size r)))
+                (fprintf port
+                  "MARV_ALIGNED(~a) union { uint8_t _b[MARV_DSZ(~a)]; ~a _t[MARV_DSZ(~a)]; } ~a = {._t={"
+                  align
+                  (number->string total)
+                  (c99-data-run-type (car runs))
+                  (c99-run-count (car runs))
+                  cname)
+                (emit-run-init (car runs) bytes)
+                (fprintf port "}};~%")
+                (when (pair? (cdr runs))
+                  (let rloop ((rs (cdr runs))
+                              (bs (list-tail bytes (run-size (car runs))))
+                              (off (run-size (car runs)))
+                              (k 1))
+                    (when (pair? rs)
+                      (let ((r (car rs)))
+                        (fprintf port
+                          "typedef union { uint8_t _b[MARV_DSZ(~a)]; ~a _t[MARV_DSZ(~a)]; } ~a_a~a_t;~%"
+                          (if (null? (cdr rs)) "MARV_DS_TAIL"
+                              (number->string (- total (+ off (run-size r)))))
+                          (c99-data-run-type r) (c99-run-count r) cname k)
+                        (fprintf port
+                          "static ~a_a~a_t ~a_a~a = {._t={"
+                          cname k cname k)
+                        (emit-run-init r bs)
+                        (fprintf port "}};~%")
+                        (fprintf port
+                          "static ~a_a~a_t *const ~a_~a = (~a_a~a_t*)((uint8_t*)&~a + ~a);~%"
+                          cname k cname k cname k cname off)
+                        (rloop (cdr rs) (list-tail bs (run-size r))
+                               (+ off (run-size r)) (+ k 1)))))
+                  (fprintf port "#if defined(__GNUC__) || defined(__clang__)~%")
+                  (fprintf port "__attribute__((constructor))~%")
+                  (fprintf port "#endif~%")
+                  (fprintf port "static void marv_dinit_~a(void);~%" cname)
+                  (fprintf port "static void marv_dinit_~a(void) {~%" cname)
+                  (let rloop ((rs (cdr runs)) (k 1))
+                    (when (pair? rs)
+                      (fprintf port "  memcpy(~a_~a, &~a_a~a, ~a);~%"
+                               cname k cname k (run-size (car rs)))
+                      (rloop (cdr rs) (+ k 1))))
+                  (fprintf port "}~%")))))
+)
       datas)
 
     ;; If any data segment has pointer relocations (ref.data / ref.func),
@@ -2592,6 +3076,14 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
         (fprintf port "__attribute__((constructor))~%")
         (fprintf port "#endif~%")
         (fprintf port "static void _marv_init_data_relocs(void) {~%")
+        ;; multi-run segments first: their anchors must be in place
+        ;; before any pointer slot (possibly inside one) is stored
+        (for-each
+          (lambda (d)
+            (when (pair? (cdr (expand-data-runs (list-ref d 7))))
+              (fprintf port "  marv_dinit_~a();~%"
+                       (resolve-c-data-sym (list-ref d 1)))))
+          datas)
         (for-each
           (lambda (d)
             (let ((dname (resolve-c-data-sym (list-ref d 1)))
@@ -2603,9 +3095,9 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
                         (soff (list-ref rel 2))
                         (boff (list-ref rel 3)))
                     (if (eq? rkind 'ref.func)
-                        (fprintf port "  marv_ptr_store((marv_ptr)~a, ~a, (marv_ptr)&~a);~%"
+                        (fprintf port "  marv_ptr_store((marv_ptr)(void *)&~a, ~a, (marv_ptr)&~a);~%"
                                  dname boff (resolve-c-func-sym rsym))
-                        (fprintf port "  marv_ptr_store((marv_ptr)~a, ~a, marv_ptr_add((marv_ptr)~a, ~a));~%"
+                        (fprintf port "  marv_ptr_store((marv_ptr)(void *)&~a, ~a, marv_ptr_add((marv_ptr)(void *)&~a, ~a));~%"
                                  dname boff (resolve-c-data-sym rsym) soff))))
                 relocs)))
           datas)
@@ -2613,10 +3105,13 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
     (fprintf port "~%")
 
     ;; 5. Function Definitions
+    ;; unstack one function at a time and emit it immediately, so
+    ;; no function IR outlives its own emission (with 2,600+ funcs,
+    ;; holding every IR at once dominates MARV's own memory use)
     (for-each
-      (lambda (irf)
-        (emit-c99-func mname irf resolve-c-data-sym resolve-c-func-sym resolve-c-global-sym port))
-      ir-funcs)))
+      (lambda (fn)
+        (emit-c99-func mname (unstack-func mod fn) resolve-c-data-sym resolve-c-func-sym resolve-c-global-sym port))
+      funcs)))
 
 (define (c99-format-opnd opnd resolve-c-data-sym resolve-c-func-sym)
   (case (opnd-kind opnd)
@@ -2638,8 +3133,8 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
      (let ((sym (cadr opnd))
            (off (caddr opnd)))
        (if (= off 0)
-           (format #f "((marv_ptr)~a)" (resolve-c-data-sym sym))
-           (format #f "marv_ptr_add((marv_ptr)~a, ~a)" (resolve-c-data-sym sym) off))))
+           (format #f "((marv_ptr)(void *)&~a)" (resolve-c-data-sym sym))
+           (format #f "marv_ptr_add((marv_ptr)(void *)&~a, ~a)" (resolve-c-data-sym sym) off))))
     ((ref-func)
      (format #f "((marv_ptr)&~a)" (resolve-c-func-sym (cadr opnd))))
     ((vreg)
@@ -2669,7 +3164,7 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
         (let ploop ((ps params) (first? #t))
           (when (pair? ps)
             (when (not first?) (fprintf port ", "))
-            (fprintf port "MARV_UNUSED ~a ~a" (c99-type (cdar ps)) (c-ident (caar ps)))
+            (fprintf port "MARV_UNUSED ~a ~a" (c99-param-type exp (cdar ps)) (c-ident (caar ps)))
             (ploop (cdr ps) #f))))
     (fprintf port ") {~%")
 
@@ -2689,12 +3184,54 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
           (deferred-tails '())
           (tail-idx 0))
 
+      ;; Trampoline fuel check (Skint-style bounded C stack): in
+      ;; MARV_TRAMPOLINE mode a chained transfer whose fuel is
+      ;; exhausted stashes its target and arguments in the marv_tc_*
+      ;; shadows and returns, unwinding to the driver loop at main.
+      ;; Only chain-signature transfers (chain-sig?, the converters'
+      ;; unit shapes) can be resumed this way; other tail calls keep
+      ;; the plain heuristic shape in every mode.
+      ;; chain signatures the trampoline can resume: the two
+      ;; converters' unit shapes.  Arguments are stashed by position
+      ;; into the generic marv_tc_state slots (see the header), so a
+      ;; resume needs nothing but the callee signature, dispatched
+      ;; on the argument count in the driver.
+      (define (chain-sig? types)
+        (or (equal? types '(i64 i64 i64 i64 ptr ptr i32))
+            (equal? types '(ptr i64 ptr ptr i32))))
+
+      (define (emit-c99-fuel-check fn-expr arg-types args)
+        (fprintf port "#ifdef MARV_TRAMPOLINE~%")
+        (fprintf port
+          "  if (--marv_tc_fuel <= 0) { marv_tc_state[0] = (marv_i64)(uintptr_t)(~a); "
+          fn-expr)
+        (let sloop ((ts arg-types) (as args) (k 3))
+          (when (pair? as)
+            (fprintf port "marv_tc_state[~a] = ~a; " k
+                     (if (eq? (car ts) 'ptr)
+                         (format #f "(marv_i64)(uintptr_t)(~a)"
+                                 (fmt (car as)))
+                         (format #f "(marv_i64)(~a)" (fmt (car as)))))
+            (sloop (cdr ts) (cdr as) (+ k 1))))
+        (fprintf port
+          "marv_tc_state[2] = ~a; marv_tc_state[1] = 1; return ((marv_ptr)0); }~%"
+          (length args))
+        (fprintf port "#endif~%"))
+
       (define (emit-c99-tail-stmt ins)
         (case (car ins)
           ((return-call)
            (let ((rt (cadr ins))
                  (callee (caddr ins))
                  (args (cadddr ins)))
+             (when (and rt (eq? rt 'ptr)
+                        (chain-sig? (map cdr params))
+                        (= (length args) (length params)))
+               (emit-c99-fuel-check
+                 (format #f "(marv_ptr)(void *)&~a"
+                         (resolve-c-func-sym callee))
+                 (map cdr params)
+                 args))
              (if rt
                  (fprintf port "  MARV_MUSTTAIL return ~a(" (resolve-c-func-sym callee))
                  (fprintf port "  ~a(" (resolve-c-func-sym callee)))
@@ -2711,6 +3248,12 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
                  (rt (caddr ins))
                  (callee-opnd (cadddr ins))
                  (args (list-ref ins 4)))
+             (when (and rt (eq? rt 'ptr) (chain-sig? ptypes)
+                        (= (length args) (length ptypes)))
+               (emit-c99-fuel-check
+                 (format #f "(marv_ptr)(~a)" (fmt callee-opnd))
+                 ptypes
+                 args))
              (if rt
                  (fprintf port "  MARV_MUSTTAIL return ((~a (*)(" (c99-type rt))
                  (fprintf port "  ((~a (*)(" (c99-type rt)))
@@ -2879,7 +3422,7 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
               (let ploop ((ps params) (first? #t))
                 (when (pair? ps)
                   (when (not first?) (fprintf port ", "))
-                  (fprintf port "~a ~a" (c99-type (cdar ps)) (c-ident (caar ps)))
+                  (fprintf port "~a ~a" (c99-param-type exp (cdar ps)) (c-ident (caar ps)))
                   (ploop (cdr ps) #f))))
           (fprintf port ") { ")
           (if rtype
@@ -2893,6 +3436,48 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
           (if rtype
               (fprintf port "); }~%")
               (fprintf port "); return; }~%")))))
+    ;; In trampoline mode the exported main was emitted as
+    ;; MARV_MAIN_FN (marv_main_impl); emit the real main as the
+    ;; Skint-style driver loop that re-enters the chain whenever a
+    ;; fuel-exhausted transfer unwound to it (marv_tc_pending).
+    (when (and exp (string=? exp "main"))
+      (fprintf port "#ifdef MARV_TRAMPOLINE~%")
+      (fprintf port "marv_i32 main(")
+      (if (null? params)
+          (fprintf port "void")
+          (let ploop ((ps params) (first? #t))
+            (when (pair? ps)
+              (when (not first?) (fprintf port ", "))
+              (fprintf port "~a ~a" (c99-param-type exp (cdar ps))
+                       (c-ident (caar ps)))
+              (ploop (cdr ps) #f))))
+      (fprintf port ") {~%")
+      (when rtype
+        (fprintf port "  ~a _rc;~%" (c99-type rtype)))
+      (fprintf port "  marv_tc_fuel = MARV_TC_FUEL;~%")
+      (fprintf port "  marv_tc_state[1] = 0;~%")
+      (fprintf port "  ")
+      (when rtype (fprintf port "_rc = "))
+      (fprintf port "MARV_MAIN_FN(")
+      (let aloop ((ps params) (first? #t))
+        (when (pair? ps)
+          (when (not first?) (fprintf port ", "))
+          (fprintf port "~a" (c-ident (caar ps)))
+          (aloop (cdr ps) #f)))
+      (fprintf port ");~%")
+      (fprintf port "  while (marv_tc_state[1]) {~%")
+      (fprintf port "    marv_tc_state[1] = 0;~%")
+      (fprintf port "    marv_tc_fuel = MARV_TC_FUEL;~%")
+      (fprintf port "    if (marv_tc_state[2] == 7)~%")
+      (fprintf port "      (void)((marv_ptr (*)(marv_i64, marv_i64, marv_i64, marv_i64, marv_ptr, marv_ptr, marv_i32))((marv_ptr)(uintptr_t)marv_tc_state[0]))(marv_tc_state[3], marv_tc_state[4], marv_tc_state[5], marv_tc_state[6], (marv_ptr)(uintptr_t)marv_tc_state[7], (marv_ptr)(uintptr_t)marv_tc_state[8], (marv_i32)marv_tc_state[9]);~%")
+      (fprintf port "    else~%")
+      (fprintf port "      (void)((marv_ptr (*)(marv_ptr, marv_i64, marv_ptr, marv_ptr, marv_i32))((marv_ptr)(uintptr_t)marv_tc_state[0]))((marv_ptr)(uintptr_t)marv_tc_state[3], marv_tc_state[4], (marv_ptr)(uintptr_t)marv_tc_state[5], (marv_ptr)(uintptr_t)marv_tc_state[6], (marv_i32)marv_tc_state[7]);~%")
+      (fprintf port "  }~%")
+      (if rtype
+          (fprintf port "  return (marv_i32)_rc;~%")
+          (fprintf port "  return 0;~%"))
+      (fprintf port "}~%")
+      (fprintf port "#endif~%"))
     (fprintf port "~%")))
 
 ;; =============================================================================
@@ -3239,8 +3824,7 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
          (globals (mod-globals mod))
          (datas (mod-datas mod))
          (funcs (mod-funcs mod))
-         (fsigs (build-func-sig-table mod))
-         (ir-funcs (map (lambda (fn) (unstack-func mod fn)) funcs)))
+         (fsigs (build-func-sig-table mod)))
 
     (define (resolve-asm-func-sym sym)
       (let ((entry (lookup-sym-entry sym fsigs)))
@@ -3378,9 +3962,9 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
     ;; 3. Functions
     (fprintf port "  .text~%")
     (for-each
-      (lambda (irf)
-        (emit-rv64g-func mname irf resolve-asm-data-sym resolve-asm-func-sym resolve-asm-global-sym port))
-      ir-funcs)
+      (lambda (fn)
+        (emit-rv64g-func mname (unstack-func mod fn) resolve-asm-data-sym resolve-asm-func-sym resolve-asm-global-sym port))
+      funcs)
     (fprintf port "  .section .note.GNU-stack,\"\",@progbits~%")))
 
 (define (emit-rv64g-func mname irf resolve-asm-data-sym resolve-asm-func-sym resolve-asm-global-sym port)
@@ -4179,6 +4763,12 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
 (define *mstd-target-dirs* '("target/" "targets/"))
 (define *mstd-system-dirs* '("lib/" "libs/"))
 (define *mstd-local-dirs*  '("./"))
+
+;; Link-mode C splitting: maximum number of function definitions per
+;; generated C piece when linking (see marv-split-c-temp below).
+;; 0 disables splitting.  Only the driver set!s this (from
+;; --split-funcs); -c mode ignores it and always emits one file.
+(define *marv-split-funcs* 300)
 
 ;; Recorded during the most recent `expand-mvs-forms` call:
 (define *last-expanded-sys-mvh-paths* '())
@@ -5900,6 +6490,7 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
     (libdir  "-L" "--system-dir"  "DIR"     "Add directory to system .mvh/.c lookup path (default: lib/)")
     (incdir  "-I" "--include-dir" "DIR"     "Add directory to local .mvh lookup path (default: ./)")
     (verbose "-v" "--verbose"     #f        "Print executed compiler/linker command")
+    (split   #f   "--split-funcs" "N"       "Link mode/cc only: split generated C into pieces of at most N functions (0=off, default 300)")
     (help    "-h" "--help"        #f        "Display this help message")))
 
 (define (marv-usage port)
@@ -5907,6 +6498,301 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
   (fprintf port "usage: marv -t TARGDES [-c] [OPTION]... FILE...~%~%")
   (fprintf port "Options:~%")
   (print-command-line-options *marv-cli-options* port))
+
+;; -----------------------------------------------------------------------------
+;; Link-mode C splitting (driver)
+;;
+;; The C emitter produces one translation unit per module, and for a
+;; large module that single unit is what makes the C compiler's memory
+;; explode (measured: ~1.3 GiB of cc1 RSS for a 2,629-function module).
+;; In link mode (no -c) with the cc target, the driver therefore splits
+;; the *generated temporary* C file into pieces of at most
+;; *marv-split-funcs* function definitions and hands all the pieces to
+;; the linker command; each piece is compiled as its own translation
+;; unit and the temporary files are deleted afterwards as before.
+;; -c mode never comes here: it always produces exactly one file.
+;;
+;; The splitter relies only on the emitter's own output format:
+;;   * every module function has a forward declaration before the data
+;;     section, and its definition is a top-level "<type> <name>(...)
+;;     {" line closed by a "}" in column 0;
+;;   * in every piece, module function prototypes lose their `static`;
+;;     data/global definitions stay in piece 0 and become `extern`
+;;     declarations (without the initialiser) in the other pieces, so
+;;     the pieces link together with one definition per symbol;
+;;   * `main` (if present) and the data-relocation constructor stay in
+;;     piece 0.
+;; -----------------------------------------------------------------------------
+
+(define (marv-parse-split-funcs s)
+  (let ((n (string->number s)))
+    (if (and (number? n) (>= n 0))
+        n
+        (error "invalid --split-funcs argument (expected a non-negative integer)" s))))
+
+(define *marv-split-ctypes*
+  '("marv_i32" "marv_u32" "marv_i64" "marv_u64"
+    "marv_f32" "marv_f64" "marv_ptr" "void"))
+
+(define (marv-split-prefix? s prefix)
+  (let ((n (string-length prefix)))
+    (and (>= (string-length s) n)
+         (string=? (substring s 0 n) prefix))))
+
+(define (marv-split-strip-static s)
+  (if (marv-split-prefix? s "static ")
+      (substring s 7 (string-length s))
+      s))
+
+;; first token of a declaration line, ignoring a leading "static"
+(define (marv-split-first-token s)
+  (let* ((s2 (marv-split-strip-static s))
+         (sp (string-index s2 #\space)))
+    (if sp (substring s2 0 sp) s2)))
+
+;; "<type> <name>(..." -> name, else #f
+(define (marv-split-decl-name s)
+  (let ((p (string-index s #\()))
+    (and p
+         (> p 0)
+         (let loop ((i (- p 1)))
+           (cond ((<= i 0) #f)
+                 ((char=? (string-ref s i) #\space)
+                  (substring s (+ i 1) p))
+                 (else (loop (- i 1))))))))
+
+;; name if LINE is a forward declaration of a module function, else #f
+(define (marv-split-proto-name line)
+  (let ((len (string-length line)))
+    (and (> len 1)
+         (char=? (string-ref line (- len 1)) #\;)
+         (string-index line #\()
+         (member (marv-split-first-token line) *marv-split-ctypes*)
+         (marv-split-decl-name line))))
+
+;; name if LINE starts a top-level definition of a declared module
+;; function (name in PROTOS), else #f
+(define (marv-split-def-name line protos)
+  (let ((len (string-length line)))
+    (and (> len 3)
+         (string=? (substring line (- len 3) len) ") {")
+         (member (marv-split-first-token line) *marv-split-ctypes*)
+         (let ((nm (marv-split-decl-name line)))
+           (and nm (member nm protos) nm)))))
+
+(define (marv-split-read-lines path)
+  (call-with-input-file path
+    (lambda (p)
+      (let loop ((acc '()))
+        (let ((l (marv-read-line p)))
+          (if (eof-object? l)
+              (reverse acc)
+              (loop (cons l acc))))))))
+
+;; split LINES into (header blocks); a block is (name line ...) with
+;; the lines in order; header is everything before the first block
+(define (marv-split-analyze lines)
+  (let loop ((ls lines) (protos '()) (header '()) (blocks '())
+             (cname #f) (cur '()))
+    (cond
+      ((null? ls)
+       (list (reverse header)
+             (reverse (if cname
+                          (cons (cons cname (reverse cur)) blocks)
+                          blocks))))
+      (cname
+       (let ((cur2 (cons (car ls) cur)))
+         (if (string=? (car ls) "}")
+             (loop (cdr ls) protos header
+                   (cons (cons cname (reverse cur2)) blocks) #f '())
+             (loop (cdr ls) protos header blocks cname cur2))))
+      (else
+       (let ((dn (marv-split-def-name (car ls) protos)))
+         (cond
+           (dn (loop (cdr ls) protos header blocks dn (list (car ls))))
+           ((null? blocks)
+            (let ((pn (marv-split-proto-name (car ls))))
+              (loop (cdr ls) (if pn (cons pn protos) protos)
+                    (cons (car ls) header) blocks #f '())))
+           (else
+            (loop (cdr ls) protos header
+                  (cons (append (car blocks) (list (car ls))) (cdr blocks))
+                  #f '()))))))))
+
+;; OUT is a reversed line list; drop the "__attribute__((constructor))"
+;; trio from its head (they belong to the relocation constructor)
+(define (marv-split-drop-attr-trio out)
+  (if (and (pair? out) (pair? (cdr out)) (pair? (cddr out))
+           (string=? (car out) "#endif")
+           (string=? (cadr out) "__attribute__((constructor))")
+           (string=? (caddr out) "#if defined(__GNUC__) || defined(__clang__)"))
+      (cdddr out)
+      out))
+
+;; remove the data-relocation constructor (it must live in piece 0 only)
+(define (marv-split-drop-ctor header)
+  (let loop ((ls header) (out '()))
+    (cond
+      ((null? ls) (reverse out))
+      ((string=? (car ls) "static void _marv_init_data_relocs(void) {")
+       (let skip ((ls2 (cdr ls)))
+         (cond ((null? ls2) (reverse (marv-split-drop-attr-trio out)))
+               ((string=? (car ls2) "}")
+                (loop (cdr ls2) (marv-split-drop-attr-trio out)))
+               (else (skip (cdr ls2))))))
+      (else (loop (cdr ls) (cons (car ls) out))))))
+
+;; "MARV_ALIGNED(a) uint8_t name[N] = {...}" -> "MARV_ALIGNED(a) uint8_t name[N]"
+(define (marv-split-data-decl body)
+  (let ((idx (marv-string-contains-idx body " = {")))
+    (if idx
+        (substring body 0 idx)
+        (let ((len (string-length body)))
+          (if (and (> len 0) (char=? (string-ref body (- len 1)) #\;))
+              (substring body 0 (- len 1))
+              body)))))
+
+;; "static <type> <name> = <init>;" (global definition)?
+(define (marv-split-global-line? line)
+  (let ((body (marv-split-strip-static line)))
+    (and (member (marv-split-first-token body) *marv-split-ctypes*)
+         (not (string-index body #\())
+         (let ((idx (marv-string-contains-idx body " = ")))
+           (and idx
+                (not (and (substring body 0 idx)
+                          (string-index (substring body 0 idx)
+                                        (integer->char 91)))))))))
+
+(define (marv-split-header-line line k)
+  (cond
+    ;; trampoline resume state: defined in piece 0, extern elsewhere.
+    ;; (The array definition has no " = ", so marv-split-global-line?
+    ;; below would not catch it; handle both lines explicitly.)
+    ((string=? line "marv_i64 marv_tc_fuel = MARV_TC_FUEL;")
+     (if (= k 0) line "extern marv_i64 marv_tc_fuel;"))
+    ((string=? line "marv_i64 marv_tc_state[16];")
+     (if (= k 0) line "extern marv_i64 marv_tc_state[16];"))
+    ;; data segment definition: defined in piece 0, extern elsewhere
+    ((or (marv-split-prefix? line "static MARV_ALIGNED(")
+         (marv-split-prefix? line "MARV_ALIGNED("))
+     (let ((body (marv-split-strip-static line)))
+       (if (= k 0)
+           body
+           (string-append "extern " (marv-split-data-decl body) ";"))))
+    ;; module function prototype: drop `static` in every piece
+    ((and (marv-split-prefix? line "static ") (marv-split-proto-name line))
+     (substring line 7 (string-length line)))
+    ;; global definition: defined in piece 0, extern elsewhere
+    ((marv-split-global-line? line)
+     (let ((body (marv-split-strip-static line)))
+       (if (= k 0)
+           body
+           (string-append "extern "
+                          (substring body 0 (marv-string-contains-idx body " = "))
+                          ";"))))
+    (else line)))
+
+(define (marv-split-header-for header k)
+  (map (lambda (l) (marv-split-header-line l k))
+       (if (= k 0) header (marv-split-drop-ctor header))))
+
+(define (marv-split-chunk blocks n)
+  (let loop ((bs blocks) (chunks '()) (cur '()) (cnt 0))
+    (cond ((null? bs)
+           (reverse (if (null? cur) chunks (cons (reverse cur) chunks))))
+          ((>= cnt n)
+           (loop bs (cons (reverse cur) chunks) '() 0))
+          (else (loop (cdr bs) chunks (cons (car bs) cur) (+ cnt 1))))))
+
+(define (marv-split-write-piece path header blocks)
+  (when (file-exists? path) (delete-file path))
+  (call-with-output-file path
+    (lambda (p)
+      (for-each (lambda (l) (display l p) (newline p)) header)
+      (for-each
+        (lambda (b)
+          (let ((ls (cdr b)))
+            (display (marv-split-strip-static (car ls)) p) (newline p)
+            (for-each (lambda (l) (display l p) (newline p)) (cdr ls))))
+        blocks))))
+
+;; split the generated C file at PATH into pieces of at most MAX-FUNCS
+;; function definitions; returns the list of piece paths (just (PATH)
+;; when no split is needed).  Piece 0 reuses PATH itself.
+
+;; Ensure the program-global trampoline state has exactly one
+;; definition in a link (mirrors the split rule: definition in the
+;; first piece, extern elsewhere).
+(define *marv-link-module-index* 0)
+
+;; does the raw C file at PATH already define the trampoline resume
+;; state?  (A MARV-generated .c produced with -c always carries the
+;; definitions, so when such a file is linked together with .mvs
+;; inputs, no .mvs module may define them again.)
+(define (marv-link-file-defines-tc-state? path)
+  (and (marv-has-suffix? path ".c")
+       (file-exists? path)
+       (let loop ((ls (marv-split-read-lines path)))
+         (cond ((null? ls) #f)
+               ((string=? (car ls) "marv_i64 marv_tc_state[16];") #t)
+               (else (loop (cdr ls)))))))
+
+(define (marv-split-tc-state-lines lines module-index)
+  (if (= module-index 0)
+      lines
+      (map (lambda (l)
+             (cond
+               ((string=? l "marv_i64 marv_tc_fuel = MARV_TC_FUEL;")
+                "extern marv_i64 marv_tc_fuel;")
+               ((string=? l "marv_i64 marv_tc_state[16];")
+                "extern marv_i64 marv_tc_state[16];")
+               (else l)))
+           lines)))
+
+(define (marv-split-c-temp path max-funcs verbose?)
+  (let* ((all-lines (marv-split-tc-state-lines
+                      (marv-split-read-lines path)
+                      *marv-link-module-index*))
+         (an (marv-split-analyze all-lines))
+         (header (car an))
+         (blocks (cadr an)))
+    (if (<= (length blocks) max-funcs)
+        (begin
+          ;; no split needed, but a non-first module must still drop
+          ;; its trampoline state definitions to externs
+          (when (> *marv-link-module-index* 0)
+            (let ((path2 path))
+              (when (file-exists? path2) (delete-file path2))
+              (call-with-output-file path2
+                (lambda (p)
+                  (for-each (lambda (l) (display l p) (newline p))
+                            all-lines)))))
+          (list path))
+        (let* ((mainb (let loop ((bs blocks))
+                        (cond ((null? bs) #f)
+                              ((string=? (caar bs) "main") (car bs))
+                              (else (loop (cdr bs))))))
+               (rest (let loop ((bs blocks) (acc '()))
+                       (cond ((null? bs) (reverse acc))
+                             ((string=? (caar bs) "main") (loop (cdr bs) acc))
+                             (else (loop (cdr bs) (cons (car bs) acc))))))
+               (chunks0 (marv-split-chunk rest max-funcs))
+               (chunks (cond ((not mainb) chunks0)
+                             ((null? chunks0) (list (list mainb)))
+                             (else (cons (cons mainb (car chunks0))
+                                         (cdr chunks0))))))
+          (when verbose?
+            (fprintf (current-error-port)
+                     "marv: split ~a (~a functions) into ~a pieces of at most ~a functions~%"
+                     path (length blocks) (length chunks) max-funcs))
+          (let loop ((ks chunks) (k 0) (acc '()))
+            (if (null? ks)
+                (reverse acc)
+                (let ((dest (if (= k 0) path (marv-make-temp-obj ".c"))))
+                  (marv-split-write-piece dest
+                                          (marv-split-header-for header k)
+                                          (car ks))
+                  (loop (cdr ks) (+ k 1) (cons dest acc)))))))))
 
 (define (marv-main args)
   (let loop ((args args)
@@ -5934,6 +6820,9 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
            (loop restargs targdes compile-only? outfile verbose?))
           ((verbose)
            (loop restargs targdes compile-only? outfile #t))
+          ((split)
+           (set! *marv-split-funcs* (marv-parse-split-funcs optarg))
+           (loop restargs targdes compile-only? outfile verbose?))
           ((help)
            (marv-usage (current-output-port))
            (exit 0))
@@ -5980,6 +6869,18 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
                      (fprintf (current-error-port)
                               "marv: -o FILE is required when -c is not specified~%")
                      (exit 1))
+                   ;; If a raw (non-.mvs) C input already defines the
+                   ;; trampoline resume state (e.g. a MARV-generated .c
+                   ;; from an earlier -c compile), every .mvs module in
+                   ;; this link must use externs: pretend one module
+                   ;; has already been seen.
+                   (when (and (eq? ttype 'cc)
+                              (let loop ((fs restargs))
+                                (cond ((null? fs) #f)
+                                      ((and (not (marv-has-suffix? (car fs) ".mvs"))
+                                            (marv-link-file-defines-tc-state? (car fs))) #t)
+                                      (else (loop (cdr fs))))))
+                     (set! *marv-link-module-index* 1))
                    (let floop ((fs restargs) (objs '()) (temp-objs '()) (sys-cs '()))
                      (if (null? fs)
                          (run-target-linker! mvt-info
@@ -5998,11 +6899,36 @@ static inline marv_f64 marv_f64_reinterpret_i64(marv_i64 a) {
                                  (when (file-exists? dest) (delete-file dest))
                                  (call-with-output-file dest
                                    (lambda (p) (compile-marv-file f ttype p)))
-                                 (let ((new-cs (map mvh-path->adapter-c-path
+                                 ;; *marv-link-module-index* must still be THIS
+                                 ;; module's index while marv-split-c-temp runs
+                                 ;; (module 0 keeps the trampoline state
+                                 ;; definitions, later modules get externs), so
+                                 ;; it is incremented only AFTER the split below.
+                                 (let ((pieces (cond ((and (eq? ttype 'cc)
+                                                           (> *marv-split-funcs* 0))
+                                                      (marv-split-c-temp dest *marv-split-funcs* verbose?))
+                                                     ((and (eq? ttype 'cc)
+                                                           (> *marv-link-module-index* 0))
+                                                      ;; splitting disabled: still drop
+                                                      ;; this module's trampoline state
+                                                      ;; definitions to externs
+                                                      (let ((ls (marv-split-tc-state-lines
+                                                                 (marv-split-read-lines dest)
+                                                                 *marv-link-module-index*)))
+                                                        (when (file-exists? dest) (delete-file dest))
+                                                        (call-with-output-file dest
+                                                          (lambda (p)
+                                                            (for-each (lambda (l) (display l p) (newline p)) ls)))
+                                                        (list dest)))
+                                                     (else (list dest))))
+                                       (new-cs (map mvh-path->adapter-c-path
                                                     *last-expanded-sys-mvh-paths*)))
+                                   (when (eq? ttype 'cc)
+                                     (set! *marv-link-module-index*
+                                           (+ *marv-link-module-index* 1)))
                                    (floop (cdr fs)
-                                          (cons dest objs)
-                                          (cons dest temp-objs)
+                                          (append (reverse pieces) objs)
+                                          (append (reverse pieces) temp-objs)
                                           (append (reverse new-cs) sys-cs))))
                                (let ((new-cs (extract-sys-c-deps-from-object f)))
                                  (floop (cdr fs)

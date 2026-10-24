@@ -168,12 +168,26 @@ Inside `(module ...)`:
   - `"..."` — raw string bytes
   - `(size N)` or `size N` — `N` zero bytes
   - `(i8 v...)` — 1-byte integers
-  - `(i16 v...)` — 2-byte little-endian integers
-  - `(i32 v...)` — 4-byte little-endian integers
-  - `(i64 v...)` — 8-byte little-endian integers
-  - `(f32 v...)` — 4-byte IEEE-754 little-endian floats
-  - `(f64 v...)` — 8-byte IEEE-754 little-endian doubles
+  - `(i16 v...)` — 2-byte integers
+  - `(i32 v...)` — 4-byte integers
+  - `(i64 v...)` — 8-byte integers
+  - `(f32 v...)` — 4-byte IEEE-754 floats
+  - `(f64 v...)` — 8-byte IEEE-754 doubles
   - `(ptr sym-or-0 ...)` — 8-byte pointer slots initialized to a data symbol `$sym` or `0` (`ptr.null`)
+
+Byte order and layout: typed items (`i16`/`i32`/`i64`/`f32`/`f64`/`ptr`)
+are stored in the *native* byte order of the C target that compiles the
+generated `.c` file, so the bytes in memory match what ordinary C code
+linked with the program expects for the corresponding C type. The
+generated code accesses them only through same-type loads and stores, so
+a `.mvs` file that initializes data exclusively with typed items (and
+addresses it with matching typed accesses) is endian-portable: the same
+source produces correct values on little- and big-endian hosts alike.
+Raw string bytes and `(size N)` regions have no inherent byte order, but
+*reinterpreting* them — or any typed region — through a different-typed
+or byte-wise access makes the program's meaning depend on the host byte
+order. Targets that are not C (e.g. `rv64g`, `wcpl`) keep the byte order
+of their own machine model.
 
 Inside `(interface ...)`, external data segments are declared with `size N`:
 

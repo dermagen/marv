@@ -55,6 +55,12 @@
   (func $deserialize_sexp (param $cstr ptr) (param $r ptr) (param $hp ptr)
         (result i64))
 
+  ;; bulk startup helpers: register a whole cell segment as roots,
+  ;; and materialize a table of literal globals from the $lits blob
+  (func $register_roots_range (param $base ptr) (param $n i32))
+  (func $deserialize_all (param $lits ptr) (param $tab ptr) (param $n i32)
+        (param $gstore ptr) (param $r ptr) (param $hp ptr) (result ptr))
+
   ;; rest-argument packing; returns new $hp
   (func $build_rest_list (param $a0 i64) (param $r ptr) (param $hp ptr)
         (param $rc i32) (param $req i32) (result ptr))
@@ -82,4 +88,53 @@
   ;; (fixnum flonum boolean char string pair vector box null);
   ;; $write_obj uses write-style (quoted strings, #\chars)
   (func $display_obj (param $o i64))
-  (func $write_obj (param $o i64)))
+  (func $write_obj (param $o i64))
+
+  ;; S2 support: bytevector access, symbol/string conversion,
+  ;; number->string digit generation (a library conversion; the
+  ;; compiled code only wraps the malloc'd payload), frexp with a
+  ;; box out-parameter for the exponent, and C pow for expt
+  (func $bytevector_type (result i64))
+  (func $make_bytevector_payload (param $len i32) (result ptr))
+  (func $is_bytevector (param $o i64) (result i32))
+  (func $bytevector_length (param $o i64) (result i32))
+  (func $bytevector_u8_ref (param $o i64) (param $i i32) (result i32))
+  (func $symbol_to_string (param $o i64) (result ptr))
+  (func $string_to_symbol (param $o i64) (result i64))
+  (func $number_to_string (param $o i64) (param $r i64) (result ptr))
+  (func $string_to_number (param $o i64) (param $r i64) (result i64))
+  (func $frexp_into_box (param $x i64) (param $b i64) (result i64))
+  (func $dpow (param $a f64) (param $b f64) (result f64))
+
+  ;; S3 ports & OS: ports are Native wrappers (payload ptr from
+  ;; the open/make functions, wrapped by compiled code); the
+  ;; standard ports are immortal static-area objects created in C
+  (func $port_type (result i64))
+  (func $current_input_port (result i64))
+  (func $current_output_port (result i64))
+  (func $current_error_port (result i64))
+  (func $is_input_port (param $o i64) (result i32))
+  (func $is_output_port (param $o i64) (result i32))
+  (func $open_input_file (param $o i64) (result ptr))
+  (func $open_output_file (param $o i64) (result ptr))
+  (func $try_open_input_file (param $o i64) (result ptr))
+  (func $try_open_output_file (param $o i64) (result ptr))
+  (func $make_input_string_port (param $o i64) (result ptr))
+  (func $make_output_string_port (result ptr))
+  (func $get_output_string_payload (param $o i64) (result ptr))
+  (func $close_port (param $o i64))
+  (func $flush_port (param $o i64))
+  (func $port_read_char (param $o i64) (result i32))
+  (func $port_peek_char (param $o i64) (result i32))
+  (func $port_write_char (param $o i64) (param $c i32))
+  (func $display_obj_port (param $p i64) (param $o i64))
+  (func $write_obj_port (param $p i64) (param $o i64))
+  (func $file_exists_p (param $o i64) (result i32))
+  (func $delete_file_p (param $o i64) (result i32))
+  (func $get_env_payload (param $o i64) (result ptr))
+  (func $current_jiffy (result i64))
+  (func $set_argv (param $argc i32) (param $argv ptr))
+  (func $command_line (result i64))
+  (func $values_tag (result i64))
+  (func $system_cmd (param $o i64) (result i64))
+  (func $exit_process (param $o i64)))

@@ -65,6 +65,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <time.h>
 
 #if !defined(__WCPL__)
 /* native build: present the scmrt_ prefixed names the MARV C target
@@ -72,6 +73,8 @@
 #define init             scmrt_init
 #define collect          scmrt_collect
 #define register_root    scmrt_register_root
+#define register_roots_range scmrt_register_roots_range
+#define deserialize_all  scmrt_deserialize_all
 #define intern_sym       scmrt_intern_sym
 #define global_loc       scmrt_global_loc
 #define deserialize_sexp scmrt_deserialize_sexp
@@ -82,6 +85,46 @@
 #define eqv_p            scmrt_eqv_p
 #define string_type      scmrt_string_type
 #define make_string_payload scmrt_make_string_payload
+#define bytevector_type    scmrt_bytevector_type
+#define make_bytevector_payload scmrt_make_bytevector_payload
+#define is_bytevector      scmrt_is_bytevector
+#define bytevector_length  scmrt_bytevector_length
+#define bytevector_u8_ref  scmrt_bytevector_u8_ref
+#define symbol_to_string   scmrt_symbol_to_string
+#define string_to_symbol   scmrt_string_to_symbol
+#define number_to_string   scmrt_number_to_string
+#define string_to_number   scmrt_string_to_number
+#define frexp_into_box     scmrt_frexp_into_box
+#define dpow               scmrt_dpow
+#define port_type          scmrt_port_type
+#define current_input_port scmrt_current_input_port
+#define current_output_port scmrt_current_output_port
+#define current_error_port scmrt_current_error_port
+#define is_input_port      scmrt_is_input_port
+#define is_output_port     scmrt_is_output_port
+#define open_input_file    scmrt_open_input_file
+#define open_output_file   scmrt_open_output_file
+#define try_open_input_file scmrt_try_open_input_file
+#define try_open_output_file scmrt_try_open_output_file
+#define make_input_string_port scmrt_make_input_string_port
+#define make_output_string_port scmrt_make_output_string_port
+#define get_output_string_payload scmrt_get_output_string_payload
+#define close_port         scmrt_close_port
+#define flush_port         scmrt_flush_port
+#define port_read_char     scmrt_port_read_char
+#define port_peek_char     scmrt_port_peek_char
+#define port_write_char    scmrt_port_write_char
+#define display_obj_port   scmrt_display_obj_port
+#define write_obj_port     scmrt_write_obj_port
+#define file_exists_p      scmrt_file_exists_p
+#define delete_file_p      scmrt_delete_file_p
+#define get_env_payload    scmrt_get_env_payload
+#define current_jiffy      scmrt_current_jiffy
+#define set_argv           scmrt_set_argv
+#define command_line       scmrt_command_line
+#define values_tag         scmrt_values_tag
+#define system_cmd         scmrt_system_cmd
+#define exit_process       scmrt_exit_process
 #define display_obj      scmrt_display_obj
 #define write_obj        scmrt_write_obj
 #define heap_limit       scmrt_heap_limit
@@ -119,6 +162,7 @@ typedef struct cxtype_s {
    function pointers in static initializers) */
 static cxtype_t string_cxtype     = { "string", NULL };
 static cxtype_t bytevector_cxtype = { "bytevector", NULL };
+static cxtype_t port_cxtype       = { "port", NULL };
 static cxtype_t hvector_cxtype    = { "hvector", NULL };
 
 /* exported GC globals (see scmrt.mvh) */
@@ -184,9 +228,20 @@ static int is_objptr(obj_t o)
   return ((o - (obj_t)(uint64_t)heap_plus1) & (obj_t)(uint64_t)hmask) == 0;
 }
 
+/* Skint's is_flonum (n.h, NAN_BOXING): a flonum is the bitwise
+   complement of a double, and for every finite double the high
+   16 bits of that complement are nonzero.  Immediates live in
+   the low 32 bits and heap pointers have zero high bits, so
+   this is disjoint from fixnums and every other class -- there
+   is no bit-pattern overlap to alias. */
 static int is_flonum(obj_t o)
 {
-  return o != 0 && (o & 3) == 0 && !is_objptr(o);
+  return (o & (obj_t)0xffff000000000000ULL) != 0;
+}
+
+static int is_fixnum(obj_t o)
+{
+  return (o & (obj_t)0xffffffff00000003ULL) == 3;   /* isim0 */
 }
 
 static char *dup_bytes(const char *s, size_t n)
@@ -281,6 +336,41 @@ void *register_root(void *slot_addr)
   }
   rt_roots[rt_roots_len++] = (obj_t *)slot_addr;
   return slot_addr;
+}
+
+obj_t deserialize_sexp(void *cstr, void *r, void *hp);
+
+/* register n consecutive 8-byte cells starting at base (a whole
+   $gstore segment) as GC roots */
+void register_roots_range(void *base, int32_t n)
+{
+  int32_t i;
+  for (i = 0; i < n; i++)
+    register_root((char *)base + i * 8);
+}
+
+/* materialize n literal globals: tab holds n (cell_offset,
+   blob_offset) i32 pairs; each literal is deserialized from
+   lits+blob_offset and stored into gstore+cell_offset */
+void *deserialize_all(void *lits, void *tab, int32_t n,
+                      void *gstore, void *r, void *hp)
+{
+  int32_t i;
+  /* tab is authored little-endian by definition (same byte-array
+     serialization as the literal blob), so assemble each i32 from
+     its 4 bytes explicitly: reading it through a native int32_t*
+     would scramble the (cell, blob) pairs on big-endian hosts */
+  const unsigned char *t = (const unsigned char *)tab;
+  for (i = 0; i < n; i++) {
+    const unsigned char *e = t + 8 * i;
+    int32_t cell_off = (int32_t)((uint32_t)e[0] | ((uint32_t)e[1] << 8)
+                                 | ((uint32_t)e[2] << 16) | ((uint32_t)e[3] << 24));
+    int32_t blob_off = (int32_t)((uint32_t)e[4] | ((uint32_t)e[5] << 8)
+                                 | ((uint32_t)e[6] << 16) | ((uint32_t)e[7] << 24));
+    obj_t o = deserialize_sexp((char *)lits + blob_off, r, hp);
+    *(obj_t *)(void *)((char *)gstore + cell_off) = o;
+  }
+  return hp;
 }
 
 /* ------------------------------------------------------------------ */
@@ -730,7 +820,9 @@ static obj_t *rds_elts(rds_t *s, size_t n)
   obj_t *elts = (obj_t *)malloc((n ? n : 1) * sizeof(obj_t));
   size_t i;
   if (!elts) { fprintf(stderr, "scmrt: out of memory\n"); abort(); }
-  for (i = 0; i < n; i++) elts[i] = rds_sexp_rec(s);
+  /* Skint's serialized format terminates every element with ';',
+     which is also what terminates a 'j' real token's text */
+  for (i = 0; i < n; i++) { elts[i] = rds_sexp_rec(s); (void)rds_getc(s); }
   return elts;
 }
 
@@ -762,7 +854,10 @@ static obj_t rds_sexp_rec(rds_t *s)
     case 'j': return mk_flonum(rds_real_tok(s));
     case 'p': {
       obj_t a = rds_sexp_rec(s);
-      obj_t b = rds_sexp_rec(s);
+      obj_t b;
+      (void)rds_getc(s);                    /* ';' after car */
+      b = rds_sexp_rec(s);
+      (void)rds_getc(s);                    /* ';' after cdr */
       obj_t *cell = static_block(SCM_PAIR_HDR, 2);
       cell[0] = a;
       cell[1] = b;
@@ -851,7 +946,9 @@ static obj_t rds_sexp_rec(rds_t *s)
     }
     case 'z': {
       obj_t a = rds_sexp_rec(s);
-      obj_t *cell = static_block(SCM_BOX_HDR, 1);
+      obj_t *cell;
+      (void)rds_getc(s);                    /* ';' after element */
+      cell = static_block(SCM_BOX_HDR, 1);
       cell[0] = a;
       return (obj_t)(uintptr_t)cell;
     }
@@ -1030,35 +1127,123 @@ void *make_string_payload(int32_t len, int32_t fill)
   return (void *)p;
 }
 
+/* ------------------------------------------------------------------ */
+/* ports (S3): Native wrappers over a malloc'd portpay_t.  File     */
+/* ports wrap a FILE*; string ports read from / accumulate into a  */
+/* strpay_t codepoint buffer.  The standard ports are immortal     */
+/* static-area wrappers created lazily.                            */
+
+#define PORT_CLOSED 0
+#define PORT_FIN    1
+#define PORT_FOUT   2
+#define PORT_SIN    3
+#define PORT_SOUT   4
+
+typedef struct portpay_s {
+  int32_t kind;
+  FILE *fp;
+  strpay_t *str;
+  int32_t pos;
+  int32_t cap;
+  int32_t peek;
+  int32_t has_peek;
+} portpay_t;
+
+static void port_free(void *vp)
+{
+  portpay_t *p = (portpay_t *)vp;
+  if (!p) return;
+  if (p->fp && p->kind == PORT_FIN) fclose(p->fp);
+  if (p->fp && p->kind == PORT_FOUT) fclose(p->fp);
+  if (p->str && p->kind == PORT_SOUT) free(p->str);
+  free(p);
+}
+
+static portpay_t *port_of(obj_t o)
+{
+  return (portpay_t *)(uintptr_t)((obj_t *)(uintptr_t)o)[0];
+}
+
+/* append one codepoint to a string-output port's buffer */
+static void spush_cp(portpay_t *p, int32_t cp)
+{
+  if (p->str->len >= p->cap) {
+    int32_t ncap = p->cap ? p->cap * 2 : 64;
+    strpay_t *ns = (strpay_t *)realloc(p->str,
+                       sizeof(strpay_t) + (size_t)(ncap - 1) * 4);
+    if (!ns) { fprintf(stderr, "scmrt: out of memory\n"); abort(); }
+    p->str = ns;
+    p->cap = ncap;
+  }
+  p->str->chars[p->str->len++] = cp;
+}
+
+/* print sink: a FILE* (stdout/stderr/file port) or, when sp is
+   set, a string-output port accumulating codepoints */
+typedef struct prsink_s {
+  FILE *fp;
+  portpay_t *sp;
+} prsink_t;
+
+static void pr_cp(prsink_t *sk, int32_t cp)
+{
+  if (sk->sp) spush_cp(sk->sp, cp);
+  else putc(cp < 128 ? (int)cp : '?', sk->fp);
+}
+
+static void pr_str(prsink_t *sk, const char *s)
+{
+  if (sk->sp) {
+    while (*s) spush_cp(sk->sp, (int32_t)(uint8_t)*s++);
+  } else {
+    fputs(s, sk->fp);
+  }
+}
+
+/* Skint-style shortest-round-trip flonum formatting (defined
+   with the S2 helpers below) */
+static void fmt_double(char *buf, double d);
+
 /* Minimal text-output rendering of the core object graph (fixnums,
    flonums, booleans, chars, strings, pairs, vectors, boxes, null) to
    stdout.  writep selects write-style (quoted strings, #\chars). */
-static void pr_obj(obj_t o, int writep)
+static void pr_sink(prsink_t *sk, obj_t o, int writep)
 {
-  if (o == SCM_FALSE) { fputs("#f", stdout); return; }
-  if (o == SCM_TRUE)  { fputs("#t", stdout); return; }
-  if (o == SCM_NULL)  { fputs("()", stdout); return; }
-  if ((o & 3) == 3) {                                  /* fixnum */
-    fprintf(stdout, "%d", (int)(int32_t)((int64_t)o >> 2));
+  if (o == SCM_FALSE) { pr_str(sk, "#f"); return; }
+  if (o == SCM_TRUE)  { pr_str(sk, "#t"); return; }
+  if (o == SCM_NULL)  { pr_str(sk, "()"); return; }
+  if (is_fixnum(o)) {                                  /* fixnum */
+    /* getim0s: sign-decode the 30-bit payload in the low word */
+    { char nb[24];
+      sprintf(nb, "%d",
+              (int)(((((int32_t)o >> 2) & 0x3fffffff) ^ 0x20000000)
+                    - 0x20000000));
+      pr_str(sk, nb); }
     return;
   }
-  if ((o & 3) == 1) {                                  /* immediate */
+  if (!(o & (obj_t)0xffffffff00000000ULL) && (o & 3) == 1) {  /* immediate: high 32 bits zero, isimm */
     obj_t itag = (o >> 2) & 63;
     if (itag == 2) {                                   /* char */
       int32_t c = (int32_t)(o >> 8);
       if (writep) {
-        if (c == 10) fputs("#\\newline", stdout);
-        else if (c == 32) fputs("#\\space", stdout);
-        else if (c >= 33 && c < 127) fprintf(stdout, "#\\%c", (int)c);
-        else fprintf(stdout, "#\\x%x", (unsigned)c);
+        if (c == 10) pr_str(sk, "#\\newline");
+        else if (c == 32) pr_str(sk, "#\\space");
+        else if (c >= 33 && c < 127) { char nb[8]; sprintf(nb, "#\\%c", (int)c); pr_str(sk, nb); }
+        else { char nb[16]; sprintf(nb, "#\\x%x", (unsigned)c); pr_str(sk, nb); }
       }
-      else if (c < 128) putchar((int)c);
-      else putchar('?');
+      else if (c < 128) pr_cp(sk, (int)c);
+      else pr_cp(sk, '?');
       return;
     }
-    if (itag == 5) { fputs("#<void>", stdout); return; }
-    if (itag == 7) { fputs("#<eof>", stdout); return; }
-    fputs("#<imm>", stdout);
+    if (itag == 4) {                                   /* symbol */
+      size_t idx = (size_t)(o >> 8);
+      if (idx < rt_syms_len) pr_str(sk, rt_syms[idx]);
+      else pr_str(sk, "#<symbol>");
+      return;
+    }
+    if (itag == 5) { pr_str(sk, "#<void>"); return; }
+    if (itag == 7) { pr_str(sk, "#<eof>"); return; }
+    pr_str(sk, "#<imm>");
     return;
   }
   if (is_objptr(o)) {
@@ -1068,71 +1253,834 @@ static void pr_obj(obj_t o, int writep)
       if (h == (obj_t)(uintptr_t)&string_cxtype) {
         strpay_t *s = (strpay_t *)(uintptr_t)cell[0];
         int32_t i;
-        if (writep) putchar('"');
+        if (writep) pr_cp(sk, '"');
         for (i = 0; i < s->len; i++) {
           int32_t c = s->chars[i];
-          if (writep && (c == '"' || c == '\\')) putchar('\\');
-          if (c < 128) putchar((int)c); else putchar('?');
+          if (writep && (c == '"' || c == '\\')) pr_cp(sk, '\\');
+          if (c < 128) pr_cp(sk, (int)c); else pr_cp(sk, '?');
         }
-        if (writep) putchar('"');
+        if (writep) pr_cp(sk, '"');
         return;
       }
-      fputs("#<Native>", stdout);
+      if (h == (obj_t)(uintptr_t)&port_cxtype) {
+        pr_str(sk, "#<port>");
+        return;
+      }
+      pr_str(sk, "#<Native>");
       return;
     }
     if (h == SCM_PAIR_HDR) {
       obj_t t = o;
-      putchar('(');
+      pr_cp(sk, '(');
       for (;;) {
         obj_t *tc = (obj_t *)(uintptr_t)t;
-        pr_obj(tc[0], writep);
+        pr_sink(sk, tc[0], writep);
         t = tc[1];
         if (t == SCM_NULL) break;
         if (is_objptr(t) && ((obj_t *)(uintptr_t)t)[-1] == SCM_PAIR_HDR) {
-          putchar(' ');
+          pr_cp(sk, ' ');
           continue;
         }
-        fputs(" . ", stdout);
-        pr_obj(t, writep);
+        pr_str(sk, " . ");
+        pr_sink(sk, t, writep);
         break;
       }
-      putchar(')');
+      pr_cp(sk, ')');
       return;
     }
     if (((h >> 1) & 3) == MTAG_VECTOR) {
       size_t n = (size_t)(h >> 3), j;
-      fputs("#(", stdout);
+      pr_str(sk, "#(");
       for (j = 0; j < n; j++) {
-        if (j) putchar(' ');
-        pr_obj(cell[j], writep);
+        if (j) pr_cp(sk, ' ');
+        pr_sink(sk, cell[j], writep);
       }
-      putchar(')');
+      pr_cp(sk, ')');
       return;
     }
     if (h == SCM_BOX_HDR) {
-      fputs("#<box ", stdout);
-      pr_obj(cell[0], writep);
-      putchar('>');
+      pr_str(sk, "#<box ");
+      pr_sink(sk, cell[0], writep);
+      pr_cp(sk, '>');
       return;
     }
-    fputs("#<obj>", stdout);
+    pr_str(sk, "#<obj>");
     return;
   }
   {                                                    /* flonum */
-    uint64_t bits = ~(uint64_t)o;
-    double d;
-    memcpy(&d, &bits, sizeof(d));
-    fprintf(stdout, "%g", d);
+    char buf[64];
+    fmt_double(buf, flo_val(o));
+    pr_str(sk, buf);
     return;
   }
 }
 
 void display_obj(obj_t o)
 {
-  pr_obj(o, 0);
+  prsink_t sk;
+  sk.fp = stdout;
+  sk.sp = NULL;
+  pr_sink(&sk, o, 0);
 }
 
 void write_obj(obj_t o)
 {
-  pr_obj(o, 1);
+  prsink_t sk;
+  sk.fp = stdout;
+  sk.sp = NULL;
+  pr_sink(&sk, o, 1);
 }
+
+/* ------------------------------------------------------------------ */
+/* S2 support: bytevectors, symbol<->string, number->string, frexp    */
+/*                                                                    */
+/* number->string's digit generation lives here as a library          */
+/* conversion: the compiled code passes the number (and radix) and    */
+/* wraps the returned malloc'd payload in a $scmn:hpushptr block.     */
+
+static int64_t fx_val(obj_t o)
+{
+  return (int64_t)(((((int32_t)o >> 2) & 0x3fffffff) ^ 0x20000000)
+                   - 0x20000000);
+}
+
+static strpay_t *strpay_from_ascii(const char *s, size_t n)
+{
+  strpay_t *p = (strpay_t *)malloc(sizeof(strpay_t)
+                                   + (n ? (n - 1) * 4 : 0));
+  size_t i;
+  if (!p) { fprintf(stderr, "scmrt: out of memory\n"); abort(); }
+  p->len = (int32_t)n;
+  for (i = 0; i < n; i++) p->chars[i] = (int32_t)(uint8_t)s[i];
+  return p;
+}
+
+obj_t bytevector_type(void)
+{
+  return (obj_t)(uintptr_t)&bytevector_cxtype;
+}
+
+void *make_bytevector_payload(int32_t len)
+{
+  bvpay_t *p = (bvpay_t *)malloc(sizeof(bvpay_t) + (len > 0 ? len - 1 : 0));
+  if (!p) { fprintf(stderr, "scmrt: out of memory\n"); abort(); }
+  p->len = len;
+  memset((char *)(void *)p + 4, 0, (size_t)(len > 0 ? len : 0));
+  return (void *)p;
+}
+
+int32_t is_bytevector(obj_t o)
+{
+  if (!is_objptr(o)) return 0;
+  return ((obj_t *)(uintptr_t)o)[-1]
+         == (obj_t)(uintptr_t)&bytevector_cxtype;
+}
+
+int32_t bytevector_length(obj_t o)
+{
+  bvpay_t *p = (bvpay_t *)(uintptr_t)((obj_t *)(uintptr_t)o)[0];
+  return p->len;
+}
+
+int32_t bytevector_u8_ref(obj_t o, int32_t i)
+{
+  bvpay_t *p = (bvpay_t *)(uintptr_t)((obj_t *)(uintptr_t)o)[0];
+  return (int32_t)p->bytes[i];
+}
+
+static int utf8_decode(const char *s, size_t n, int32_t *out)
+{
+  /* decode the symbol name bytes into codepoints; the count is
+     returned via the produced payload length, here directly */
+  size_t i = 0;
+  int32_t len = 0;
+  while (i < n) {
+    uint32_t c = (uint8_t)s[i];
+    size_t k = 1;
+    if (c >= 0xf0)      { c &= 7;  k = 4; }
+    else if (c >= 0xe0) { c &= 15; k = 3; }
+    else if (c >= 0xc0) { c &= 31; k = 2; }
+    {
+      size_t j;
+      for (j = 1; j < k && i + j < n; j++)
+        c = (c << 6) | ((uint8_t)s[i + j] & 63);
+    }
+    out[len++] = (int32_t)c;
+    i += k;
+  }
+  return len;
+}
+
+void *symbol_to_string(obj_t o)
+{
+  const char *name = rt_syms[(size_t)(o >> 8)];
+  size_t n = strlen(name);
+  strpay_t *p = (strpay_t *)malloc(sizeof(strpay_t)
+                                   + (n ? (n - 1) * 4 : 0));
+  if (!p) { fprintf(stderr, "scmrt: out of memory\n"); abort(); }
+  p->len = utf8_decode(name, n, p->chars);
+  return (void *)p;
+}
+
+obj_t string_to_symbol(obj_t o)
+{
+  strpay_t *p = (strpay_t *)(uintptr_t)((obj_t *)(uintptr_t)o)[0];
+  char *buf = (char *)malloc((size_t)(p->len > 0 ? p->len : 1) * 4 + 1);
+  size_t n = 0;
+  int32_t i;
+  obj_t s;
+  if (!buf) { fprintf(stderr, "scmrt: out of memory\n"); abort(); }
+  for (i = 0; i < p->len; i++) {
+    uint32_t c = (uint32_t)p->chars[i];
+    if (c < 0x80) {
+      buf[n++] = (char)c;
+    } else if (c < 0x800) {
+      buf[n++] = (char)(0xc0 | (c >> 6));
+      buf[n++] = (char)(0x80 | (c & 63));
+    } else if (c < 0x10000) {
+      buf[n++] = (char)(0xe0 | (c >> 12));
+      buf[n++] = (char)(0x80 | ((c >> 6) & 63));
+      buf[n++] = (char)(0x80 | (c & 63));
+    } else {
+      buf[n++] = (char)(0xf0 | (c >> 18));
+      buf[n++] = (char)(0x80 | ((c >> 12) & 63));
+      buf[n++] = (char)(0x80 | ((c >> 6) & 63));
+      buf[n++] = (char)(0x80 | (c & 63));
+    }
+  }
+  s = intern_bytes(buf, n);
+  free(buf);
+  return s;
+}
+
+/* Skint-style flonum formatting: the shortest decimal that
+   round-trips (found via %.*e at increasing precision), in
+   fixed notation when the decimal exponent is in [-4, 15],
+   scientific (d[.ddd]e<exp>, no '+', no leading zeros)
+   otherwise; integral fixed values get a trailing .0 */
+static void fmt_double(char *buf, double d)
+{
+  char tmp[64], digs[24];
+  int prec, e = 0, nd = 0, neg = 0;
+  char *p;
+  if (d != d) { strcpy(buf, "+nan.0"); return; }
+  if (d == HUGE_VAL) { strcpy(buf, "+inf.0"); return; }
+  if (d == -HUGE_VAL) { strcpy(buf, "-inf.0"); return; }
+  if (d == 0.0) { strcpy(buf, signbit(d) ? "-0.0" : "0.0"); return; }
+  if (d < 0) { neg = 1; d = -d; }
+  for (prec = 1; prec <= 17; prec++) {
+    sprintf(tmp, "%.*e", prec - 1, d);
+    if (strtod(tmp, NULL) == d) break;
+  }
+  /* tmp is like "2.500e+10": collect digits and the exponent */
+  p = tmp;
+  while (*p && *p != 'e') {
+    if (*p >= '0' && *p <= '9') digs[nd++] = *p;
+    p++;
+  }
+  e = atoi(p + 1);
+  digs[nd] = '\0';
+  p = buf;
+  if (neg) *p++ = '-';
+  if (e >= -4 && e <= 15) {
+    if (e >= 0) {
+      int i;
+      for (i = 0; i <= e; i++) *p++ = (i < nd) ? digs[i] : '0';
+      if (nd > e + 1) {
+        *p++ = '.';
+        for (i = e + 1; i < nd; i++) *p++ = digs[i];
+      } else {
+        *p++ = '.'; *p++ = '0';
+      }
+    } else {
+      int i;
+      *p++ = '0'; *p++ = '.';
+      for (i = 0; i < -e - 1; i++) *p++ = '0';
+      for (i = 0; i < nd; i++) *p++ = digs[i];
+    }
+  } else {
+    int i;
+    *p++ = digs[0];
+    if (nd > 1) {
+      *p++ = '.';
+      for (i = 1; i < nd; i++) *p++ = digs[i];
+    }
+    *p++ = 'e';
+    if (e < 0) { *p++ = '-'; e = -e; }
+    sprintf(p, "%d", e);
+    return;
+  }
+  *p = '\0';
+}
+
+static void fmt_radix_int(char *buf, int64_t v, int radix)
+{
+  char tmp[40];
+  uint64_t uv = (v < 0) ? (uint64_t)(-(v + 1)) + 1 : (uint64_t)v;
+  int n = 0, i = 0;
+  if (uv == 0) tmp[n++] = '0';
+  while (uv != 0) {
+    uint32_t d = (uint32_t)(uv % (uint64_t)radix);
+    tmp[n++] = (char)(d < 10 ? '0' + d : 'a' + (d - 10));
+    uv /= (uint64_t)radix;
+  }
+  if (v < 0) buf[i++] = '-';
+  while (n > 0) buf[i++] = tmp[--n];
+  buf[i] = '\0';
+}
+
+void *number_to_string(obj_t o, obj_t ro)
+{
+  char buf[1200];
+  int radix = 10;
+  if (is_fixnum(ro)) {
+    int64_t r = fx_val(ro);
+    if (r >= 2 && r <= 36) radix = (int)r;
+  }
+  buf[0] = '\0';
+  if (is_fixnum(o)) {
+    fmt_radix_int(buf, fx_val(o), radix);
+  } else if (is_flonum(o)) {
+    double d = flo_val(o);
+    if (radix != 10 && d == d && d != HUGE_VAL && d != -HUGE_VAL
+        && d == trunc(d) && fabs(d) <= 9007199254740992.0) {
+      fmt_radix_int(buf, (int64_t)d, radix);
+      strcat(buf, ".0");
+    } else {
+      fmt_double(buf, d);
+    }
+  } else {
+    strcpy(buf, "0");
+  }
+  return (void *)strpay_from_ascii(buf, strlen(buf));
+}
+
+obj_t frexp_into_box(obj_t x, obj_t b)
+{
+  int e = 0;
+  double m = frexp(flo_val(x), &e);
+  ((obj_t *)(uintptr_t)b)[0] = mk_fixnum((int64_t)e);
+  return mk_flonum(m);
+}
+
+double dpow(double a, double b)
+{
+  return pow(a, b);
+}
+
+/* ------------------------------------------------------------------ */
+/* S3: ports and OS services                                          */
+/*                                                                    */
+/* File and string ports share the portpay_t layout declared with    */
+/* the print sink above.  Payloads created here are wrapped by       */
+/* compiled code ($scmn:hpushptr over $scmrt:port_type), except      */
+/* the immortal standard ports, which live in the static area.       */
+
+/* string obj -> malloc'd NUL-terminated UTF-8 bytes (filenames,
+   environment names, %system commands) */
+static char *str_obj_bytes(obj_t o)
+{
+  strpay_t *p = (strpay_t *)(uintptr_t)((obj_t *)(uintptr_t)o)[0];
+  char *buf = (char *)malloc((size_t)(p->len > 0 ? p->len : 1) * 4 + 1);
+  size_t n = 0;
+  int32_t i;
+  if (!buf) { fprintf(stderr, "scmrt: out of memory\n"); abort(); }
+  for (i = 0; i < p->len; i++) {
+    uint32_t c = (uint32_t)p->chars[i];
+    if (c < 0x80) {
+      buf[n++] = (char)c;
+    } else if (c < 0x800) {
+      buf[n++] = (char)(0xc0 | (c >> 6));
+      buf[n++] = (char)(0x80 | (c & 63));
+    } else if (c < 0x10000) {
+      buf[n++] = (char)(0xe0 | (c >> 12));
+      buf[n++] = (char)(0x80 | ((c >> 6) & 63));
+      buf[n++] = (char)(0x80 | (c & 63));
+    } else {
+      buf[n++] = (char)(0xf0 | (c >> 18));
+      buf[n++] = (char)(0x80 | ((c >> 12) & 63));
+      buf[n++] = (char)(0x80 | ((c >> 6) & 63));
+      buf[n++] = (char)(0x80 | (c & 63));
+    }
+  }
+  buf[n] = '\0';
+  return buf;
+}
+
+/* string->number (library conversion): integers in the 30-bit
+   fixnum range become fixnums, other numeric values become
+   flonums (this runtime has no bignums), non-numbers become #f.
+   Non-allocating: the result is always an immediate. */
+obj_t string_to_number(obj_t o, obj_t ro)
+{
+  char *s = str_obj_bytes(o);
+  const char *p = s;
+  int radix = 10;
+  int neg = 0, any = 0, big = 0;
+  int64_t v = 0;
+  double d;
+  obj_t res = (obj_t)0;                 /* #f */
+  if (is_fixnum(ro)) {
+    int64_t r = fx_val(ro);
+    if (r >= 2 && r <= 36) radix = (int)r;
+  }
+  if (p[0] == '#' && (p[1] == 'b' || p[1] == 'o' || p[1] == 'd' || p[1] == 'x')) {
+    radix = (p[1] == 'b') ? 2 : (p[1] == 'o') ? 8 : (p[1] == 'd') ? 10 : 16;
+    p += 2;
+  }
+  if (*p == '+') p++;
+  else if (*p == '-') { neg = 1; p++; }
+  {
+    const char *q = p;
+    for (; *q; q++) {
+      int c = (unsigned char)*q, dig;
+      if (c >= '0' && c <= '9') dig = c - '0';
+      else if (c >= 'a' && c <= 'z') dig = c - 'a' + 10;
+      else if (c >= 'A' && c <= 'Z') dig = c - 'A' + 10;
+      else break;
+      if (dig >= radix) break;
+      any = 1;
+      if (!big) {
+        v = v * radix + dig;
+        if (v > 536870911LL) big = 1;   /* beyond fixnum: go double */
+      }
+    }
+    if (any && *q == '\0') {
+      if (big) {
+        double dv = 0;
+        for (; *p; p++) {
+          int c = (unsigned char)*p, dig;
+          if (c >= '0' && c <= '9') dig = c - '0';
+          else if (c >= 'a' && c <= 'z') dig = c - 'a' + 10;
+          else dig = c - 'A' + 10;
+          dv = dv * radix + dig;
+        }
+        res = mk_flonum(neg ? -dv : dv);
+      } else {
+        res = mk_fixnum(neg ? -v : v);
+      }
+      free(s);
+      return res;
+    }
+  }
+  if (radix == 10 && any) {
+    char *end = NULL;
+    d = strtod(s, &end);
+    if (end && end != s && *end == '\0') res = mk_flonum(d);
+  }
+  if (!strcmp(s, "+inf.0")) res = mk_flonum(HUGE_VAL);
+  else if (!strcmp(s, "-inf.0")) res = mk_flonum(-HUGE_VAL);
+  else if (!strcmp(s, "+nan.0") || !strcmp(s, "-nan.0")) res = mk_flonum(HUGE_VAL - HUGE_VAL);
+  free(s);
+  return res;
+}
+
+obj_t port_type(void)
+{
+  return (obj_t)(uintptr_t)&port_cxtype;
+}
+
+static portpay_t *new_portpay(int32_t kind)
+{
+  portpay_t *p = (portpay_t *)calloc(1, sizeof(portpay_t));
+  if (!p) { fprintf(stderr, "scmrt: out of memory\n"); abort(); }
+  port_cxtype.free = &port_free;
+  p->kind = kind;
+  p->peek = -1;
+  return p;
+}
+
+static obj_t rt_pin = 0;
+static obj_t rt_pout = 0;
+static obj_t rt_perr = 0;
+
+static obj_t mk_std_port(FILE *fp, int32_t kind)
+{
+  portpay_t *p;
+  ensure_init();
+  p = new_portpay(kind);
+  p->fp = fp;
+  return native_obj(&port_cxtype, (void *)p);
+}
+
+obj_t current_input_port(void)
+{
+  if (!rt_pin) rt_pin = mk_std_port(stdin, PORT_FIN);
+  return rt_pin;
+}
+
+obj_t current_output_port(void)
+{
+  if (!rt_pout) rt_pout = mk_std_port(stdout, PORT_FOUT);
+  return rt_pout;
+}
+
+obj_t current_error_port(void)
+{
+  if (!rt_perr) rt_perr = mk_std_port(stderr, PORT_FOUT);
+  return rt_perr;
+}
+
+static int32_t port_kind_p(obj_t o, int32_t a, int32_t b)
+{
+  int32_t k;
+  if (!is_objptr(o)) return 0;
+  if (((obj_t *)(uintptr_t)o)[-1] != (obj_t)(uintptr_t)&port_cxtype)
+    return 0;
+  k = port_of(o)->kind;
+  return k == a || k == b;
+}
+
+int32_t is_input_port(obj_t o)
+{
+  return port_kind_p(o, PORT_FIN, PORT_SIN);
+}
+
+int32_t is_output_port(obj_t o)
+{
+  return port_kind_p(o, PORT_FOUT, PORT_SOUT);
+}
+
+void *open_input_file(obj_t o)
+{
+  char *name = str_obj_bytes(o);
+  FILE *fp = fopen(name, "r");
+  portpay_t *p;
+  if (!fp) {
+    fprintf(stderr, "scmrt: cannot open input file: %s\n", name);
+    free(name);
+    abort();
+  }
+  free(name);
+  p = new_portpay(PORT_FIN);
+  p->fp = fp;
+  return (void *)p;
+}
+
+void *open_output_file(obj_t o)
+{
+  char *name = str_obj_bytes(o);
+  FILE *fp = fopen(name, "w");
+  portpay_t *p;
+  if (!fp) {
+    fprintf(stderr, "scmrt: cannot open output file: %s\n", name);
+    free(name);
+    abort();
+  }
+  free(name);
+  p = new_portpay(PORT_FOUT);
+  p->fp = fp;
+  return (void *)p;
+}
+
+/* %open-input-file / %open-output-file: NULL payload (= #f in
+   the wrapper macro) when the file cannot be opened */
+void *try_open_input_file(obj_t o)
+{
+  char *name = str_obj_bytes(o);
+  FILE *fp = fopen(name, "r");
+  portpay_t *p;
+  free(name);
+  if (!fp) return NULL;
+  p = new_portpay(PORT_FIN);
+  p->fp = fp;
+  return (void *)p;
+}
+
+void *try_open_output_file(obj_t o)
+{
+  char *name = str_obj_bytes(o);
+  FILE *fp = fopen(name, "w");
+  portpay_t *p;
+  free(name);
+  if (!fp) return NULL;
+  p = new_portpay(PORT_FOUT);
+  p->fp = fp;
+  return (void *)p;
+}
+
+void *make_input_string_port(obj_t o)
+{
+  portpay_t *p = new_portpay(PORT_SIN);
+  p->str = (strpay_t *)(uintptr_t)((obj_t *)(uintptr_t)o)[0];
+  p->pos = 0;
+  return (void *)p;
+}
+
+void *make_output_string_port(void)
+{
+  portpay_t *p = new_portpay(PORT_SOUT);
+  p->str = (strpay_t *)malloc(sizeof(strpay_t));
+  if (!p->str) { fprintf(stderr, "scmrt: out of memory\n"); abort(); }
+  p->str->len = 0;
+  p->cap = 0;
+  return (void *)p;
+}
+
+void *get_output_string_payload(obj_t o)
+{
+  portpay_t *p = port_of(o);
+  int32_t n = p->str->len;
+  strpay_t *r = (strpay_t *)malloc(sizeof(strpay_t)
+                                   + (n > 0 ? (size_t)(n - 1) * 4 : 0));
+  if (!r) { fprintf(stderr, "scmrt: out of memory\n"); abort(); }
+  r->len = n;
+  memcpy((char *)(void *)r + 4, (char *)(void *)p->str + 4,
+         (size_t)n * 4);
+  return (void *)r;
+}
+
+void close_port(obj_t o)
+{
+  portpay_t *p = port_of(o);
+  if ((p->kind == PORT_FIN || p->kind == PORT_FOUT) && p->fp != NULL) {
+    fclose(p->fp);
+    p->fp = NULL;
+  }
+  p->kind = PORT_CLOSED;
+}
+
+void flush_port(obj_t o)
+{
+  portpay_t *p = port_of(o);
+  if (p->kind == PORT_FOUT && p->fp != NULL) fflush(p->fp);
+}
+
+static int32_t port_getc(portpay_t *p)
+{
+  if (p->has_peek) {
+    p->has_peek = 0;
+    return p->peek;
+  }
+  if (p->kind == PORT_SIN) {
+    if (p->pos >= p->str->len) return -1;
+    return p->str->chars[p->pos++];
+  }
+  if (p->kind == PORT_FIN) {
+    int c = fgetc(p->fp);
+    uint32_t cp;
+    int n;
+    if (c == EOF) return -1;
+    if (c < 0x80) return (int32_t)c;
+    if (c >= 0xf0)      { cp = (uint32_t)(c & 7);  n = 3; }
+    else if (c >= 0xe0) { cp = (uint32_t)(c & 15); n = 2; }
+    else                { cp = (uint32_t)(c & 31); n = 1; }
+    while (n-- > 0) {
+      int c2 = fgetc(p->fp);
+      if (c2 == EOF) break;
+      cp = (cp << 6) | (uint32_t)(c2 & 63);
+    }
+    return (int32_t)cp;
+  }
+  fprintf(stderr, "scmrt: read from a non-input port\n");
+  abort();
+  return -1;
+}
+
+int32_t port_read_char(obj_t o)
+{
+  return port_getc(port_of(o));
+}
+
+int32_t port_peek_char(obj_t o)
+{
+  portpay_t *p = port_of(o);
+  int32_t c = port_getc(p);
+  p->peek = c;
+  p->has_peek = 1;
+  return c;
+}
+
+static void utf8_fputc(FILE *fp, uint32_t c)
+{
+  if (c < 0x80) {
+    fputc((int)c, fp);
+  } else if (c < 0x800) {
+    fputc((int)(0xc0 | (c >> 6)), fp);
+    fputc((int)(0x80 | (c & 63)), fp);
+  } else if (c < 0x10000) {
+    fputc((int)(0xe0 | (c >> 12)), fp);
+    fputc((int)(0x80 | ((c >> 6) & 63)), fp);
+    fputc((int)(0x80 | (c & 63)), fp);
+  } else {
+    fputc((int)(0xf0 | (c >> 18)), fp);
+    fputc((int)(0x80 | ((c >> 12) & 63)), fp);
+    fputc((int)(0x80 | ((c >> 6) & 63)), fp);
+    fputc((int)(0x80 | (c & 63)), fp);
+  }
+}
+
+void port_write_char(obj_t o, int32_t cp)
+{
+  portpay_t *p = port_of(o);
+  if (p->kind == PORT_SOUT) { spush_cp(p, cp); return; }
+  if (p->kind == PORT_FOUT) { utf8_fputc(p->fp, (uint32_t)cp); return; }
+  fprintf(stderr, "scmrt: write to a non-output port\n");
+  abort();
+}
+
+static prsink_t port_sink(obj_t o)
+{
+  portpay_t *p = port_of(o);
+  prsink_t sk;
+  sk.fp = NULL;
+  sk.sp = NULL;
+  if (p->kind == PORT_SOUT) { sk.sp = p; return sk; }
+  if (p->kind == PORT_FOUT) { sk.fp = p->fp; return sk; }
+  fprintf(stderr, "scmrt: display/write to a non-output port\n");
+  abort();
+  return sk;
+}
+
+void display_obj_port(obj_t po, obj_t o)
+{
+  prsink_t sk = port_sink(po);
+  pr_sink(&sk, o, 0);
+}
+
+void write_obj_port(obj_t po, obj_t o)
+{
+  prsink_t sk = port_sink(po);
+  pr_sink(&sk, o, 1);
+}
+
+int32_t file_exists_p(obj_t o)
+{
+  char *name = str_obj_bytes(o);
+  FILE *fp = fopen(name, "r");
+  free(name);
+  if (fp) { fclose(fp); return 1; }
+  return 0;
+}
+
+int32_t delete_file_p(obj_t o)
+{
+  char *name = str_obj_bytes(o);
+  int rc = remove(name);
+  free(name);
+  return rc == 0;
+}
+
+void *get_env_payload(obj_t o)
+{
+  char *name = str_obj_bytes(o);
+  const char *v = getenv(name);
+  size_t n;
+  int32_t *tmp, m;
+  strpay_t *r;
+  free(name);
+  if (!v) return NULL;
+  n = strlen(v);
+  tmp = (int32_t *)malloc((n + 1) * 4);
+  if (!tmp) { fprintf(stderr, "scmrt: out of memory\n"); abort(); }
+  m = utf8_decode(v, n, tmp);
+  r = (strpay_t *)malloc(sizeof(strpay_t)
+                         + (m > 0 ? (size_t)(m - 1) * 4 : 0));
+  if (!r) { fprintf(stderr, "scmrt: out of memory\n"); abort(); }
+  r->len = m;
+  memcpy((char *)(void *)r + 4, tmp, (size_t)m * 4);
+  free(tmp);
+  return (void *)r;
+}
+
+obj_t current_jiffy(void)
+{
+  return mk_fixnum((int64_t)(clock() * 1000 / CLOCKS_PER_SEC));
+}
+
+/* The process command line, captured by generated $main before it
+   enters compiled code.  The list is built once in the immortal
+   static area, so command_line needs neither GC-heap allocation nor
+   root juggling and can be called at any point. */
+static int32_t rt_argc = 0;
+static char **rt_argv = NULL;
+static obj_t rt_command_line = SCM_NULL;
+static int rt_command_line_ready = 0;
+
+void set_argv(int32_t argc, void *argv)
+{
+  rt_argc = argc > 0 ? argc : 0;
+  rt_argv = (char **)argv;
+  rt_command_line = SCM_NULL;
+  rt_command_line_ready = 0;
+}
+
+obj_t command_line(void)
+{
+  int32_t i;
+  obj_t lst = SCM_NULL;
+  ensure_init();
+  if (rt_command_line_ready) return rt_command_line;
+  for (i = rt_argc - 1; i >= 0; i--) {
+    const char *s = rt_argv && rt_argv[i] ? rt_argv[i] : "";
+    size_t n = strlen(s);
+    int32_t *tmp = (int32_t *)malloc((n + 1) * sizeof(int32_t));
+    strpay_t *pay;
+    obj_t str;
+    obj_t *pair;
+    int32_t m;
+    if (!tmp) { fprintf(stderr, "scmrt: out of memory\n"); abort(); }
+    m = utf8_decode(s, n, tmp);
+    pay = (strpay_t *)malloc(sizeof(strpay_t)
+                             + (m > 0 ? (size_t)(m - 1) * 4 : 0));
+    if (!pay) { fprintf(stderr, "scmrt: out of memory\n"); abort(); }
+    pay->len = m;
+    memcpy((char *)(void *)pay + 4, tmp, (size_t)m * 4);
+    free(tmp);
+    str = native_obj(&string_cxtype, (void *)pay);
+    pair = static_block(SCM_PAIR_HDR, 2);
+    pair[0] = str;
+    pair[1] = lst;
+    lst = (obj_t)(uintptr_t)pair;
+  }
+  rt_command_line = lst;
+  rt_command_line_ready = 1;
+  return lst;
+}
+
+/* The unique tag object heading a multiple-values vector (element 0;
+   the remaining elements are the values).  One immortal instance, so
+   identity comparison with eq? is reliable; user code cannot forge
+   it because it is never exposed as a value itself. */
+static obj_t rt_values_tag = 0;
+static int rt_values_tag_ready = 0;
+
+obj_t values_tag(void)
+{
+  obj_t *cell;
+  ensure_init();
+  if (rt_values_tag_ready) return rt_values_tag;
+  cell = static_block(SCM_HDR(0, MTAG_VECTOR), 0);
+  rt_values_tag = (obj_t)(uintptr_t)cell;
+  rt_values_tag_ready = 1;
+  return rt_values_tag;
+}
+
+void exit_process(obj_t o)
+{
+  int code = is_fixnum(o) ? (int)fx_val(o) : 0;
+  fflush(NULL);
+  exit(code);
+}
+
+/* %system runs a shell command.  The WCPL/WASM target has no
+   shell: per the project rule the stub prints the command to
+   stderr and reports failure (fixnum -1). */
+#if defined(__WCPL__)
+obj_t system_cmd(obj_t o)
+{
+  char *cmd = str_obj_bytes(o);
+  fprintf(stderr, "scmrt: %%system unavailable on this target: %s\n",
+          cmd);
+  free(cmd);
+  return mk_fixnum(-1);
+}
+#else
+obj_t system_cmd(obj_t o)
+{
+  char *cmd = str_obj_bytes(o);
+  int rc = system(cmd);
+  free(cmd);
+  return mk_fixnum((int64_t)rc);
+}
+#endif

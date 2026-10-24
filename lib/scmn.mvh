@@ -27,8 +27,12 @@
 ;;; The including module must (include $scmrt) first: the templates
 ;;; reference $scmrt:heap_plus1/$hmask/$collect/$string_type.
 ;;;
-;;; Object representation (lib/scmrt.mvh): obj is a NaN-boxed i64.
-;;;   fixnum (n<<2)|3   (30-bit payload, unchecked wraparound)
+;;; Object representation (lib/scmrt.mvh): obj is a NaN-boxed i64,
+;;; partitioned exactly as in Skint's n.h (NAN_BOXING): immediates
+;;; occupy the low 32 bits only (high 32 bits zero), heap pointers
+;;; have zero high 16 bits, and a flonum's high 16 bits are
+;;; nonzero -- the classes cannot overlap.
+;;;   fixnum: 30-bit payload in the low 32 bits, (payload<<2)|3
 ;;;   #f = 0, #t = 1, '() = 13, char = (code<<8)|9
 ;;;   flonum = bitwise complement of the f64 bit pattern
 ;;;   heap obj: header at obj-8, hdr = (size<<3)|(mtag<<1)|1,
@@ -190,44 +194,54 @@
   ;; Fixnums (n.h: is_fixnum, fixnum_obj, get_fixnum)
   ;; ================================================================
 
+  ;; The class tests follow Skint's NAN_BOXING partition exactly,
+  ;; so no bit pattern is both a fixnum and a flonum: immediates
+  ;; (fixnums, chars, ...) live entirely in the low 32 bits -- the
+  ;; high 32 bits are zero -- while a flonum is the bitwise
+  ;; complement of a double, whose high 16 bits are nonzero for
+  ;; every finite double (and heap pointers have zero high bits).
   (macro $is_fixnum ($o)
     (effect () -> (i32))
-    (i64.eq (i64.and $o (i64.const 3)) (i64.const 3)))
+    (i64.eq (i64.and $o (i64.const -4294967293)) (i64.const 3)))
 
-  ;; are_fixnums(x, y): Skint's both-fixnums test (n.h:559).  A
-  ;; fixnum is the only class with both low bits set, so a single
-  ;; AND of the two objects tests both at once: ((x & y) & 3) == 3.
+  ;; are_fixnums(x, y): Skint's both-fixnums test (n.h are_fixnums
+  ;; is is_fixnum(o1) && is_fixnum(o2)).  The two tests cannot be
+  ;; fused into one AND against the isim0 mask: a fixnum's zero
+  ;; high word would mask off a flonum's nonzero high word in
+  ;; (x & y), and a flonum whose inverted low word ends in 11
+  ;; (e.g. 7.5, 1.5) would then pass as a fixnum.
   (macro $are_fixnums ($x $y)
     (effect () -> (i32))
-    (i64.eq (i64.and (i64.and $x $y) (i64.const 3)) (i64.const 3)))
+    (i32.and ($scmn:is_fixnum $x) ($scmn:is_fixnum $y)))
 
-  ;; fixnum_obj(v): box a raw i64 payload (low 30 bits are kept by
-  ;; the representation; unchecked)
+  ;; fixnum_obj(v): box a raw payload as mkim0 does -- the 30-bit
+  ;; payload sits in the low 32 bits, high bits zero (unchecked:
+  ;; payloads outside FIXNUM_MIN..FIXNUM_MAX wrap in 30 bits)
   (macro $fixnum_obj ($v)
     (effect () -> (i64))
-    (i64.or (i64.shl $v (i64.const 2)) (i64.const 3)))
+    (i64.or (i64.shl (i64.and $v (i64.const 1073741823))
+                     (i64.const 2))
+            (i64.const 3)))
 
-  ;; get_fixnum(o): the raw payload of a fixnum obj
+  ;; get_fixnum(o): getim0s -- sign-decode the 30-bit payload out
+  ;; of the low 32 bits (shift the low word to the top, then
+  ;; arithmetic-shift back down past the tag bits)
   (macro $get_fixnum ($o)
     (effect () -> (i64))
-    (i64.shr_s $o (i64.const 2)))
+    (i64.shr_s (i64.shl $o (i64.const 32)) (i64.const 34)))
 
   ;; ================================================================
   ;; Flonums (n.h: is_flonum, flonum_obj, get_flonum)
   ;; ================================================================
 
-  ;; Matches lib/scmrt.c's is_flonum exactly (o != 0, (o&3) == 0,
-  ;; not a heap pointer); Skint's n.h tests high bits instead, but
-  ;; here the heap range is small and known, so the low-bit test
-  ;; partitions the same space.  Only doubles whose bit pattern
-  ;; ends in 11 box into this class; other doubles alias fixnum/
-  ;; immediate patterns for the predicates, although get_flonum
-  ;; below round-trips any of them exactly.
+  ;; Skint's is_flonum (n.h, NAN_BOXING): the high 16 bits of the
+  ;; complemented double are nonzero.  This is disjoint from every
+  ;; other class by construction: immediates and heap pointers
+  ;; both have zero in the high bits, so there is no bit-pattern
+  ;; overlap between flonums and fixnums (or anything else).
   (macro $is_flonum ($o)
     (effect () -> (i32))
-    (i32.and (i64.ne $o (i64.const 0))
-             (i32.and (i64.eq (i64.and $o (i64.const 3)) (i64.const 0))
-                      (i32.eqz ($scmn:is_objptr $o)))))
+    (i64.ne (i64.and $o (i64.const -281474976710656)) (i64.const 0)))
 
   (macro $flonum_obj ($d)
     (effect () -> (i64))
@@ -251,9 +265,11 @@
   ;; Characters (n.h: CHAR_ITAG, is_char, char_obj, get_char)
   ;; ================================================================
 
+  ;; isimm(o, CHAR_ITAG): the full mask (high 32 bits zero, low
+  ;; byte the tag) keeps flonums out, as in n.h
   (macro $is_char ($o)
     (effect () -> (i32))
-    (i64.eq (i64.and $o (i64.const 255)) (i64.const 9)))
+    (i64.eq (i64.and $o (i64.const -4294967041)) (i64.const 9)))
 
   ;; char_obj(c): box an i64 codepoint
   (macro $char_obj ($c)
