@@ -1128,17 +1128,40 @@
     (list 'data name export-name mut align (car expanded) (cdr expanded) r3)))
 
 ;; Parse a (global ...) form
+;;   (global $name [(export "n")] T|(mut T) [<const expr>])
+;; The shape is checked here: an unknown type used to travel on as a type and
+;; fail much later, and a missing initializer used to default to (i32.const 0)
+;; whatever the type was, which put an i32 constant in an i64 global.  [cco]
 (define (parse-global form)
   (let* ((name (cadr form))
          (r0 (cddr form))
          (has-exp (and (pair? r0) (pair? (car r0)) (eq? (caar r0) 'export)))
          (export-name (if has-exp (cadar r0) #f))
-         (r1 (if has-exp (cdr r0) r0))
-         (type-spec (car r1))
-         (mut? (and (pair? type-spec) (eq? (car type-spec) 'mut)))
-         (vtype (if mut? (cadr type-spec) type-spec))
-         (init-expr (if (pair? (cdr r1)) (cadr r1) '(i32.const 0))))
-    (list 'global name export-name mut? vtype init-expr)))
+         (r1 (if has-exp (cdr r0) r0)))
+    (if (not (pair? r1))
+        (error "malformed (global ...): type expected" form))
+    (let* ((type-spec (car r1))
+           (mut? (and (pair? type-spec) (eq? (car type-spec) 'mut)))
+           (vtype (if mut?
+                      (if (and (pair? (cdr type-spec)) (null? (cddr type-spec)))
+                          (cadr type-spec)
+                          (error "malformed (global ...): (mut T) expected" form))
+                      type-spec))
+           (rest (cdr r1)))
+      (if (not (memq vtype '(i32 i64 f32 f64 ptr)))
+          (error "malformed (global ...): type must be i32, i64, f32, f64 or ptr, alone or as (mut T)" form))
+      (if (and (pair? rest) (pair? (cdr rest)))
+          (error "malformed (global ...): at most one initializer expected" form))
+      (if (and (pair? rest) (not (pair? (car rest))))
+          (error "malformed (global ...): initializer must be a constant expression" form))
+      (let ((init-expr
+              (cond ((pair? rest) (car rest))
+                    ((eq? vtype 'i32) '(i32.const 0))
+                    ((eq? vtype 'i64) '(i64.const 0))
+                    ((eq? vtype 'f32) '(f32.const 0.0))
+                    ((eq? vtype 'f64) '(f64.const 0.0))
+                    (else '(ptr.null)))))
+        (list 'global name export-name mut? vtype init-expr)))))
 
 ;; Parse an (import "mod" "name" <desc>) form
 (define (parse-import form)
@@ -1232,6 +1255,8 @@
                    (loop (cdr r) imports globals datas (cons (list 'table (cadr it) (caddr it)) tables) funcs))
                   ((func)
                    (loop (cdr r) imports globals datas tables (cons (parse-func it) funcs)))
+                  ((include)
+                   (error "(include ...) belongs before the (module ...) form, not inside it" it))
                   (else
                    (error "unknown top-level form in module" it)))))))))
 

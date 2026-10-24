@@ -2,6 +2,10 @@
 
 The `lib/` directory contains MARV's standard library interface headers (`lib/*.mvh`) and their corresponding single-source C adapter implementations (`lib/*.c`).
 
+This directory is MARV's cover for the host C library. The runtime support
+for Scheme code compiled to MARV lives in [`srt/`](../srt/README.md), which
+is maintained with the S-MARV compiler rather than with MARV.
+
 Include a system module at the top of a `.mvs` or `.mvh` file using:
 
 ```scheme

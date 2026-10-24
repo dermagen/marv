@@ -6,7 +6,7 @@ MARV allows compilers and low-level systems code to emit a single, target-indepe
 
 1. **WCPL (`.wo` / `.wasm`)** — Extended WebAssembly text objects linked into standalone WASI `.wasm` binaries by [WCPL](https://github.com/false-schemers/wcpl).
 2. **RV64G (`.s`)** — RISC-V 64-bit LP64D assembly with automatic register allocation.
-3. **CC (`.c`)** — Restricted, undefined-behavior-free C99 compiled by standard C compilers (`cc`, `gcc`, `clang`).
+3. **CC (`.c`)** — Restricted C99 compiled by standard C compilers (`cc`, `gcc`, `clang`), free of undefined behavior except where the MARV program itself divides by zero or overflows a signed division, which `doc/README.md` 5.4 leaves undefined on every target.
 
 ---
 
@@ -180,6 +180,7 @@ skint -p src/skint/marv.scm -t cc -o queens examples/queens.mvs
 - [`doc/`](doc/README.md) — Complete MARV technical specification, instruction reference, calling conventions, and `lib/` adapter authoring guide.
 - [`src/`](src/README.md) — Compiler source code (`src/sf/` `#F` source, `src/skint/marv.scm` R7RS Scheme source) and CLI reference.
 - [`lib/`](lib/README.md) — Standard library `.mvh` headers and single-source `.c` adapters (`lib/*.mvh`, `lib/*.c`).
+- [`srt/`](srt/README.md) — Runtime support for Scheme code compiled to MARV; maintained with the S-MARV compiler, not with MARV (`srt/*.mvh`, `srt/*.c`).
 - [`target/`](target/README.md) — Target description files (`target/*.mvt`) for `wcpl`, `cc`, `gcc`, `clang`, `cl`, and `rv64g`.
 - [`examples/`](examples/README.md) — Single-module and multi-module `.mvs`/`.mvh` example programs.
 - [`test/`](test/README.md) — Unit, RV64G simulator, and end-to-end target test suite.

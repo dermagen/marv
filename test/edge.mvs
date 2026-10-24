@@ -1,0 +1,158 @@
+;; test/edge.mvs -- edge cases where a code generator usually goes wrong.
+;; Every function returns one i32, so the same values can be read back from a
+;; cc build and from an rv64g run and compared with test/edge.expected, which
+;; holds what WebAssembly semantics require.   [cco]
+
+(include system $stdio)
+
+(module $probe
+
+  (data $fmt const align 1 "%s=%d\n\x00;")
+  (data $n01 const align 1 "t01\x00;") (data $n02 const align 1 "t02\x00;")
+  (data $n03 const align 1 "t03\x00;") (data $n04 const align 1 "t04\x00;")
+  (data $n05 const align 1 "t05\x00;") (data $n06 const align 1 "t06\x00;")
+  (data $n07 const align 1 "t07\x00;") (data $n08 const align 1 "t08\x00;")
+  (data $n09 const align 1 "t09\x00;") (data $n10 const align 1 "t10\x00;")
+  (data $n11 const align 1 "t11\x00;") (data $n12 const align 1 "t12\x00;")
+  (data $n13 const align 1 "t13\x00;") (data $n14 const align 1 "t14\x00;")
+  (data $n15 const align 1 "t15\x00;") (data $n16 const align 1 "t16\x00;")
+  (data $n17 const align 1 "t17\x00;") (data $n18 const align 1 "t18\x00;")
+  (data $n19 const align 1 "t19\x00;") (data $n20 const align 1 "t20\x00;")
+  (data $n21 const align 1 "t21\x00;") (data $n22 const align 1 "t22\x00;")
+  (data $n23 const align 1 "t23\x00;") (data $n24 const align 1 "t24\x00;")
+
+
+  ;; --- shifts and rotates: counts are taken modulo the width -----------------
+  (func $t01 (export "t01") (result i32)          ; 1 << 33  ==  1 << 1
+    (return (i32.shl (i32.const 1) (i32.const 33))))
+
+  (func $t02 (export "t02") (result i32)          ; -16 >>s 33 == -16 >>s 1
+    (return (i32.shr_s (i32.const -16) (i32.const 33))))
+
+  (func $t03 (export "t03") (result i32)          ; 0x80000000 >>u 31 == 1
+    (return (i32.shr_u (i32.const -2147483648) (i32.const 31))))
+
+  (func $t04 (export "t04") (result i32)          ; rotl(0x12345678, 36) == rotl(.,4)
+    (return (i32.rotl (i32.const 305419896) (i32.const 36))))
+
+  (func $t05 (export "t05") (result i32)          ; rotr(1, 1) == 0x80000000
+    (return (i32.rotr (i32.const 1) (i32.const 1))))
+
+  ;; --- signed and unsigned division and remainder ---------------------------
+  (func $t06 (export "t06") (result i32)          ; -7 /s 2 == -3 (toward zero)
+    (return (i32.div_s (i32.const -7) (i32.const 2))))
+
+  (func $t07 (export "t07") (result i32)          ; -7 %s 2 == -1 (sign of dividend)
+    (return (i32.rem_s (i32.const -7) (i32.const 2))))
+
+  (func $t08 (export "t08") (result i32)          ; 0x80000000 /u 3
+    (return (i32.div_u (i32.const -2147483648) (i32.const 3))))
+
+  (func $t09 (export "t09") (result i32)          ; 0x80000000 %u 7
+    (return (i32.rem_u (i32.const -2147483648) (i32.const 7))))
+
+  ;; --- bit counting ----------------------------------------------------------
+  (func $t10 (export "t10") (result i32)          ; clz(0)=32 ctz(0)=32 popcnt(-1)=32
+    (return (i32.add (i32.add (i32.clz (i32.const 0)) (i32.ctz (i32.const 0)))
+                     (i32.popcnt (i32.const -1)))))
+
+  ;; --- i64 width: shifts modulo 64, then narrow ------------------------------
+  (func $t11 (export "t11") (result i32)          ; (1i64 << 65) == 2 -> wrap
+    (return (i32.wrap_i64 (i64.shl (i64.const 1) (i64.const 65)))))
+
+  (func $t12 (export "t12") (result i32)          ; wrap of 0x1_0000_0001 == 1
+    (return (i32.wrap_i64 (i64.const 4294967297))))
+
+  ;; --- sign extension --------------------------------------------------------
+  (func $t13 (export "t13") (result i32)          ; extend8_s(0xFF) == -1
+    (return (i32.extend8_s (i32.const 255))))
+
+  (func $t14 (export "t14") (result i32)          ; extend16_s(0x8000) == -32768
+    (return (i32.extend16_s (i32.const 32768))))
+
+  (func $t15 (export "t15") (result i32)          ; i64.extend32_s(0x8000_0000) -> -2147483648
+    (return (i32.wrap_i64 (i64.extend32_s (i64.const 2147483648)))))
+
+  ;; --- float to integer, integer to float ------------------------------------
+  (func $t16 (export "t16") (result i32)          ; trunc toward zero, both signs
+    (return (i32.add (i32.trunc_f64_s (f64.const -2.9))
+                     (i32.trunc_f64_s (f64.const 2.9)))))
+
+  (func $t17 (export "t17") (result i32)          ; trunc_f64_u of 3e9, wrapped to i32
+    (return (i32.trunc_f64_u (f64.const 3000000000.0))))
+
+  (func $t18 (export "t18") (result i32)          ; f32 bit pattern of 1.0
+    (return (i32.reinterpret_f32 (f32.const 1.0))))
+
+  ;; --- rounding: nearest is ties-to-even -------------------------------------
+  (func $t19 (export "t19") (result i32)          ; 2.5->2, 3.5->4, -2.5->-2  => 4
+    (return (i32.add (i32.add (i32.trunc_f64_s (f64.nearest (f64.const 2.5)))
+                              (i32.trunc_f64_s (f64.nearest (f64.const 3.5))))
+                     (i32.trunc_f64_s (f64.nearest (f64.const -2.5))))))
+
+  ;; --- min/max and copysign on signed zero -----------------------------------
+  (func $t20 (export "t20") (result i32)          ; min(-0.0,+0.0) must be -0.0
+    (return (i32.wrap_i64 (i64.shr_u (i64.reinterpret_f64
+                                       (f64.min (f64.const -0.0) (f64.const 0.0)))
+                                     (i64.const 63)))))
+
+  (func $t21 (export "t21") (result i32)          ; copysign(3.0,-0.0) == -3.0
+    (return (i32.trunc_f64_s (f64.copysign (f64.const 3.0) (f64.const -0.0)))))
+
+  ;; --- memory: narrow store then signed and unsigned load ---------------------
+  (func $t22 (export "t22") (result i32)
+    (frame 16)
+    (i32.store8 (frame.addr 0) (i32.const 200))
+    (return (i32.add (i32.load8_s (frame.addr 0))      ; -56
+                     (i32.load8_u (frame.addr 0)))))   ; 200  => 144
+
+  ;; --- br_table: an out-of-range index takes the default ----------------------
+  (func $t23 (export "t23") (param $i i32) (result i32)
+    (block $out (result i32)
+      (block $d
+        (block $c
+          (block $b
+            (block $a
+              (br_table $a $b $c $d (local.get $i)))
+            (br $out (i32.const 10)))
+          (br $out (i32.const 20)))
+        (br $out (i32.const 30)))
+      (br $out (i32.const 40))))
+
+  (func $t24 (export "t24") (result i32)          ; 0,1,2 then 99 (out of range)
+    (return (i32.add (i32.add (call $t23 (i32.const 0)) (call $t23 (i32.const 2)))
+                     (call $t23 (i32.const 99)))))
+
+  ;; --- driver -----------------------------------------------------------------
+  (func $show (param $name ptr) (param $v i32)
+    (frame 48)
+    (drop (call $printf (ref.data $fmt) (local.get $name) (local.get $v))))
+
+  (func $main (export "main") (param $argc i32) (param $argv ptr) (result i32)
+    (frame 16)
+    (call $show (ref.data $n01) (call $t01))
+    (call $show (ref.data $n02) (call $t02))
+    (call $show (ref.data $n03) (call $t03))
+    (call $show (ref.data $n04) (call $t04))
+    (call $show (ref.data $n05) (call $t05))
+    (call $show (ref.data $n06) (call $t06))
+    (call $show (ref.data $n07) (call $t07))
+    (call $show (ref.data $n08) (call $t08))
+    (call $show (ref.data $n09) (call $t09))
+    (call $show (ref.data $n10) (call $t10))
+    (call $show (ref.data $n11) (call $t11))
+    (call $show (ref.data $n12) (call $t12))
+    (call $show (ref.data $n13) (call $t13))
+    (call $show (ref.data $n14) (call $t14))
+    (call $show (ref.data $n15) (call $t15))
+    (call $show (ref.data $n16) (call $t16))
+    (call $show (ref.data $n17) (call $t17))
+    (call $show (ref.data $n18) (call $t18))
+    (call $show (ref.data $n19) (call $t19))
+    (call $show (ref.data $n20) (call $t20))
+    (call $show (ref.data $n21) (call $t21))
+    (call $show (ref.data $n22) (call $t22))
+    (call $show (ref.data $n23) (call $t23 (i32.const 1)))
+    (call $show (ref.data $n24) (call $t24))
+    (return (i32.const 0)))
+)

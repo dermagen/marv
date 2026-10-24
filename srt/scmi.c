@@ -1,5 +1,5 @@
 /* scmi.c -- callable implementations behind the $scmi instruction
- * macros (lib/scmi.mvh), the MARV counterpart of the slow paths in
+ * macros (srt/scmi.mvh), the MARV counterpart of the slow paths in
  * Skint's i.c generic arithmetic.
  *
  * The macros keep only what inlines well: the both-fixnums fast
@@ -17,9 +17,9 @@
  * prefixed scmi_ (via the #define block below), matching what the
  * MARV C target expects ($scmi:add_slow -> scmi_add_slow, and so
  * on).  In compile-and-link mode MARV links this file
- * automatically as the companion of lib/scmi.mvh.
+ * automatically as the companion of srt/scmi.mvh.
  *
- * Object representation (see lib/scmn.mvh): fixnums are the
+ * Object representation (see srt/scmn.mvh): fixnums are the
  * 30-bit payload in the low word tagged 3, flonums are the
  * bitwise complement of a double (NAN_BOXING; the two classes
  * are disjoint by construction).  The generic-numeric functions
@@ -92,7 +92,7 @@
 #define getostr_slow_hreserved scmi_getostr_slow_hreserved
 #define getenv_slow_hreserved scmi_getenv_slow_hreserved
 /* $scmrt payload/wrapper services used by the allocating
-   instructions below (lib/scmrt.h is the WCPL-side declaration) */
+   instructions below (srt/scmrt.h is the WCPL-side declaration) */
 #define make_string_payload scmrt_make_string_payload
 #define string_type scmrt_string_type
 #define make_bytevector_payload scmrt_make_bytevector_payload
@@ -153,7 +153,7 @@ obj_t port_type(void);
 #define FIXNUM_MAX (536870911LL)
 
 /* ------------------------------------------------------------------ */
-/* small helpers (mirroring lib/scmrt.c and Skint's n.h)               */
+/* small helpers (mirroring srt/scmrt.c and Skint's n.h)               */
 
 static int is_flonum(obj_t o)
 {
@@ -476,7 +476,7 @@ void *cons_slow_hreserved(void *r, void *hp, obj_t car, obj_t cdr)
 
 /* ------------------------------------------------------------------ */
 /* the remaining allocating instructions, same convention.  Block   */
-/* access mirrors lib/scmn.mvh: an obj points at its first cell,    */
+/* access mirrors srt/scmn.mvh: an obj points at its first cell,    */
 /* the header word is the cell just below it.  String payloads are  */
 /* the scmrt strpay_t layout {int32 len; int32 chars[]} behind the  */
 /* wrapper's cell 0; payload memory itself is malloc'd in $scmrt    */

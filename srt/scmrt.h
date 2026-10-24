@@ -1,11 +1,11 @@
 /* scmrt.h -- the $scmrt module's payload/wrapper services as seen
- * from other WCPL C modules (currently lib/scmi.c, whose allocating
+ * from other WCPL C modules (currently srt/scmi.c, whose allocating
  * instructions build string/bytevector/port payloads through them).
  *
  * Under WCPL this header is how a module declares calls into
  * $scmrt: the #pragma module line makes the compiler emit
  * (import "scmrt" ...) for each extern used.  Native builds never
- * include this file -- lib/scmi.c declares the same entry points
+ * include this file -- srt/scmi.c declares the same entry points
  * itself, renamed to their scmrt_ C symbols by its #define block.
  */
 

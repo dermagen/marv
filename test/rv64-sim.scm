@@ -76,6 +76,30 @@
               (if (not (eq? (odd? ua) (odd? ub))) (+ acc bit) acc)))))
 
 ;; Convert IEEE-754 64-bit integer bits back to a Scheme flonum
+
+;; [cco] fcvt carries a rounding mode; the simulator used to truncate always,
+;; so f64.nearest (which the backend lowers with rne) came out wrong.
+(define (rv-round-mode x mode)
+  (cond ((not mode) (truncate x))
+        ((string=? mode "rtz") (truncate x))
+        ((string=? mode "rne") (round x))        ; ties to even, as RISC-V rne
+        ((string=? mode "rdn") (floor x))
+        ((string=? mode "rup") (ceiling x))
+        ((string=? mode "rmm") (if (< x 0.0) (- (floor (+ (- x) 0.5))) (floor (+ x 0.5))))
+        (else (truncate x))))
+(define (rv-cvt-mode ops) (and (pair? (cddr ops)) (caddr ops)))
+
+(define (ieee32-bits->flonum bits)      ; [cco] single-precision pattern
+  (let* ((b (modulo bits (expt 2 32)))
+         (sign (if (>= b (expt 2 31)) -1.0 1.0))
+         (e (quotient (modulo b (expt 2 31)) (expt 2 23)))
+         (m (modulo b (expt 2 23))))
+    (cond ((and (= e 255) (> m 0)) (/ 0. 0.))
+          ((= e 255) (* sign (/ 1. 0.)))
+          ((= e 0) (* sign (exact->inexact m) (expt 2.0 -149)))
+          (else (* sign (+ 1.0 (* (exact->inexact m) (expt 2.0 -23)))
+                   (expt 2.0 (- e 127)))))))
+
 (define (ieee64-bits->flonum bits)
   (let* ((u (u64 bits))
          (s (quotient u *pow2-63*))
@@ -258,6 +282,24 @@
     (vector mem data-syms (list->vector (reverse code-list)) code-labels data-ptr)))
 
 ;; Memory load/store helpers on simulator bytevector
+
+;; [cco] RISC-V float helpers: the sign of zero matters, and fmin/fmax return
+;; the non-NaN operand rather than propagating NaN.
+(define (flnan-rv? x) (not (= x x)))
+(define (flnegative-rv x)             ; true for -0.0 as well as negatives
+  (or (< x 0.0) (and (= x 0.0) (< (/ 1.0 x) 0.0))))
+(define (flmin-rv a b)
+  (cond ((flnan-rv? a) b) ((flnan-rv? b) a)
+        ((= a b) (if (flnegative-rv a) a b))   ; -0.0 is the smaller zero
+        ((< a b) a) (else b)))
+(define (flmax-rv a b)
+  (cond ((flnan-rv? a) b) ((flnan-rv? b) a)
+        ((= a b) (if (flnegative-rv a) b a))
+        ((> a b) a) (else b)))
+(define (flcopysign-rv a b)
+  (let ((m (if (flnegative-rv a) (- a) a)))
+    (if (flnegative-rv b) (- m) m)))
+
 (define (sim-load-u mem addr nbytes)
   (let loop ((i (- nbytes 1)) (acc 0))
     (if (< i 0)
@@ -497,12 +539,18 @@
                     ((or (string=? op "fmv.d") (string=? op "fmv.s"))
                      (set-fp! (car ops) (get-fp (cadr ops)))
                      (run next-pc))
-                    ((or (string=? op "fmv.d.x") (string=? op "fmv.w.x"))
+                    ((string=? op "fmv.d.x")
                      (let ((bits (get-gp (cadr ops))))
                        (set-fp! (car ops) (if (= bits 0) 0.0 (ieee64-bits->flonum bits)))
                        (run next-pc)))
-                    ((or (string=? op "fmv.x.d") (string=? op "fmv.x.w"))
+                    ((string=? op "fmv.w.x")      ; [cco] 32-bit pattern, not 64
+                     (set-fp! (car ops) (ieee32-bits->flonum (get-gp (cadr ops))))
+                     (run next-pc))
+                    ((string=? op "fmv.x.d")
                      (set-gp! (car ops) (flonum->ieee64-bits (get-fp (cadr ops))))
+                     (run next-pc))
+                    ((string=? op "fmv.x.w")      ; [cco] 32 bits, sign-extended
+                     (set-gp! (car ops) (s32 (flonum->ieee32-bits (get-fp (cadr ops)))))
                      (run next-pc))
 
                     ;; Memory Loads
@@ -518,6 +566,7 @@
                          ((string=? op "lw")  (set-gp! rd (sim-load-s mem addr 4)))
                          ((string=? op "lwu") (set-gp! rd (sim-load-u mem addr 4)))
                          ((string=? op "ld")  (set-gp! rd (sim-load-s mem addr 8)))
+                         ((string=? op "flw") (set-fp! rd (ieee32-bits->flonum (sim-load-u mem addr 4))))  ; [cco]
                          ((string=? op "fld") (set-fp! rd (ieee64-bits->flonum (sim-load-u mem addr 8)))))
                        (run next-pc)))
 
@@ -531,6 +580,7 @@
                          ((string=? op "sh")  (sim-store! mem addr (get-gp rs) 2))
                          ((string=? op "sw")  (sim-store! mem addr (get-gp rs) 4))
                          ((string=? op "sd")  (sim-store! mem addr (get-gp rs) 8))
+                         ((string=? op "fsw") (sim-store! mem addr (flonum->ieee32-bits (get-fp rs)) 4))  ; [cco]
                          ((string=? op "fsd") (sim-store! mem addr (flonum->ieee64-bits (get-fp rs)) 8)))
                        (run next-pc)))
 
@@ -576,6 +626,32 @@
                      (run next-pc))
 
                     ;; Register ALU (32-bit *w and 64-bit)
+                    ;; [cco] emitted by i32.rotl/rotr, f64.min/max and f64.copysign
+                    ((string=? op "negw")
+                     (set-gp! (car ops) (s32 (- (s32 (get-gp (cadr ops))))))
+                     (run next-pc))
+                    ((string=? op "neg")
+                     (set-gp! (car ops) (- (get-gp (cadr ops))))
+                     (run next-pc))
+                    ((string=? op "fmin.d")
+                     (set-fp! (car ops) (flmin-rv (get-fp (cadr ops)) (get-fp (caddr ops))))
+                     (run next-pc))
+                    ((string=? op "fmax.d")
+                     (set-fp! (car ops) (flmax-rv (get-fp (cadr ops)) (get-fp (caddr ops))))
+                     (run next-pc))
+                    ((string=? op "fsgnj.d")      ; copysign
+                     (set-fp! (car ops) (flcopysign-rv (get-fp (cadr ops)) (get-fp (caddr ops))))
+                     (run next-pc))
+                    ((string=? op "fsgnjn.d")     ; copysign with the sign negated
+                     (set-fp! (car ops) (flcopysign-rv (get-fp (cadr ops))
+                                                       (- (get-fp (caddr ops)))))
+                     (run next-pc))
+                    ((string=? op "fsgnjx.d")     ; xor of the signs
+                     (set-fp! (car ops)
+                              (flcopysign-rv (get-fp (cadr ops))
+                                             (* (if (flnegative-rv (get-fp (cadr ops))) -1.0 1.0)
+                                                (get-fp (caddr ops)))))
+                     (run next-pc))
                     ((string=? op "add")
                      (set-gp! (car ops) (+ (get-gp (cadr ops)) (get-gp (caddr ops))))
                      (run next-pc))
@@ -696,16 +772,16 @@
                      (set-fp! (car ops) (inexact (u64 (get-gp (cadr ops)))))
                      (run next-pc))
                     ((or (string=? op "fcvt.w.d") (string=? op "fcvt.w.s"))
-                     (set-gp! (car ops) (s32 (exact (truncate (get-fp (cadr ops))))))
+                     (set-gp! (car ops) (s32 (exact (rv-round-mode (get-fp (cadr ops)) (rv-cvt-mode ops)))))
                      (run next-pc))
                     ((or (string=? op "fcvt.wu.d") (string=? op "fcvt.wu.s"))
-                     (set-gp! (car ops) (s32 (u32 (exact (truncate (get-fp (cadr ops)))))))
+                     (set-gp! (car ops) (s32 (u32 (exact (rv-round-mode (get-fp (cadr ops)) (rv-cvt-mode ops))))))
                      (run next-pc))
                     ((or (string=? op "fcvt.l.d") (string=? op "fcvt.l.s"))
-                     (set-gp! (car ops) (s64 (exact (truncate (get-fp (cadr ops))))))
+                     (set-gp! (car ops) (s64 (exact (rv-round-mode (get-fp (cadr ops)) (rv-cvt-mode ops)))))
                      (run next-pc))
                     ((or (string=? op "fcvt.lu.d") (string=? op "fcvt.lu.s"))
-                     (set-gp! (car ops) (u64 (exact (truncate (get-fp (cadr ops))))))
+                     (set-gp! (car ops) (u64 (exact (rv-round-mode (get-fp (cadr ops)) (rv-cvt-mode ops)))))
                      (run next-pc))
 
                     ;; Branches & Calls

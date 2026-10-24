@@ -1,7 +1,7 @@
 ;;; scmn.mvh -- S-MARV object primitives, the MARV counterpart of
 ;;; Skint's n.h/n.c (the "n" layer: native object representation).
 ;;;
-;;; Where lib/scmrt provides the heap and collector, this file
+;;; Where srt/scmrt provides the heap and collector, this file
 ;;; provides the vocabulary everything else is written in, following
 ;;; n.h section by section: block headers and sizes, hend_*
 ;;; allocation, immediates (fixnums, flonums, chars, booleans),
@@ -27,7 +27,7 @@
 ;;; The including module must (include $scmrt) first: the templates
 ;;; reference $scmrt:heap_plus1/$hmask/$collect/$string_type.
 ;;;
-;;; Object representation (lib/scmrt.mvh): obj is a NaN-boxed i64,
+;;; Object representation (srt/scmrt.mvh): obj is a NaN-boxed i64,
 ;;; partitioned exactly as in Skint's n.h (NAN_BOXING): immediates
 ;;; occupy the low 32 bits only (high 32 bits zero), heap pointers
 ;;; have zero high 16 bits, and a flonum's high 16 bits are

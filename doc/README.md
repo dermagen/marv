@@ -200,15 +200,17 @@ Inside `(interface ...)`, external data segments are declared with `size N`:
 Inside `(module ...)`:
 
 ```scheme
-(global $counter mut i32 (export "counter") (i32.const 0))
+(global $counter (export "counter") (mut i32) (i32.const 0))
 (global $pi f64 (f64.const #x1.921fb54442d18p+1))
-(global $head mut ptr (ptr.null))
+(global $head (mut ptr) (ptr.null))
 ```
+
+A mutable global's type is written `(mut T)`, as in WebAssembly; an immutable one is just `T`. The optional `(export "name")` clause comes before the type, and the initializer last.
 
 Inside `(interface ...)`:
 
 ```scheme
-(global $errno mut i32)
+(global $errno (mut i32))
 ```
 
 ### 4.3 Function Definitions (`func`)
@@ -254,7 +256,7 @@ Semantics:
 
 - Parameters are substituted syntactically into the template (after the arguments themselves have been macro-expanded); an argument referenced twice is expanded twice.
 - `(locals ...)` and `(labels ...)` declare macro-private names. They are hygienically renamed on every expansion, and declared locals are allocated in the enclosing function. Any other `$name` in the template (e.g. a caller's `$hp` above) refers to the enclosing function's locals, which is what makes zero-overhead inline runtime helpers possible.
-- The `(effect (ins) -> (outs))` clause is required and is **checked**: the compiler simulates the template's stack effect and rejects the definition if it differs from the declared one. Branches in a template may only target labels the macro itself declares.
+- The `(effect (ins) -> (outs))` clause is required and is **checked at every expansion**: the compiler simulates the template's stack effect at the invocation and rejects the invocation if it differs from the declared one. A macro that is defined but never invoked is not checked, so a header can carry a macro whose declared effect is wrong until some module uses it. Branches in a template may only target labels the macro itself declares.
 - Redefinition follows the C rule: re-registering an identical macro (e.g. the same header included twice) is a no-op, while a different body under an existing name is a compile-time error — macros cannot shadow or override one another.
 
 ---
@@ -362,6 +364,16 @@ For both `T = i32` and `T = i64`:
 - **Comparisons (`[T] -> [i32]` for `eqz`; `[T T] -> [i32]` for binary comparisons, yielding `1` or `0`):**
   - `T.eqz`, `T.eq`, `T.ne`, `T.lt_s`, `T.lt_u`, `T.gt_s`, `T.gt_u`, `T.le_s`, `T.le_u`, `T.ge_s`, `T.ge_u`
 
+**Division is defined only where the targets agree.** A program must not divide by zero, and must not compute `T.div_s` with the most negative value as dividend and `-1` as divisor. The `cc` emitter lowers division to plain C `/` and `%` and does not guard either case, so a front end that needs defined behaviour emits the test itself. Measured:
+
+| Case | `rv64g` | `cc` | `wcpl` |
+|---|---|---|---|
+| `div_s(INT_MIN, -1)` | `INT_MIN`: `divw` defines the overflow | undefined behaviour in C (one build returned `INT_MIN`, another aborted) | traps, "divide result unrepresentable" |
+| `rem_s(INT_MIN, -1)` | `0` | undefined behaviour in C (observed `0`) | `0`, defined |
+| division by zero | `divw`/`remw`, which RISC-V defines without trapping | undefined behaviour in C (observed `SIGILL`) | traps |
+
+The `rv64g` column is what the emitted instruction is specified to do; it has not yet been run on hardware.
+
 ### 5.5 Floating-Point Operations (`f32` and `f64`)
 
 For both `F = f32` and `F = f64`:
@@ -372,6 +384,8 @@ For both `F = f32` and `F = f64`:
   - `F.abs`, `F.neg`, `F.sqrt`, `F.ceil`, `F.floor`, `F.trunc`, `F.nearest` (round to nearest, ties to even)
 - **Comparisons (`[F F] -> [i32]`, yielding `1` or `0`):**
   - `F.eq`, `F.ne`, `F.lt`, `F.gt`, `F.le`, `F.ge`
+
+`F.min` and `F.max` agree on signed zero across the targets: `min(-0.0, +0.0)` is `-0.0` on all three. They do **not** agree when an operand is NaN, and a program must not depend on what they do with one. Measured with `min(NaN, 1.0)`: `wcpl` returns NaN, because WebAssembly propagates it, while `cc` returns `1.0`, because it lowers to C `fmin`, which returns the other operand. `rv64g` emits `fmin.d`, which RISC-V also specifies to return the other operand.
 
 ### 5.6 Conversions & Reinterpretations
 

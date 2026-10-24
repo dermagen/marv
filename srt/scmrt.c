@@ -2012,7 +2012,8 @@ obj_t command_line(void)
   ensure_init();
   if (rt_command_line_ready) return rt_command_line;
   for (i = rt_argc - 1; i >= 0; i--) {
-    const char *s = rt_argv && rt_argv[i] ? rt_argv[i] : "";
+    /* explicit NULL tests: WCPL has no implicit pointer-to-bool [cco] */
+    const char *s = (rt_argv != NULL && rt_argv[i] != NULL) ? rt_argv[i] : "";
     size_t n = strlen(s);
     int32_t *tmp = (int32_t *)malloc((n + 1) * sizeof(int32_t));
     strpay_t *pay;

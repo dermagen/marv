@@ -6,7 +6,7 @@
 ;;; vmk, sget, ...), which mostly have no underscores.  The Scheme
 ;;; names they implement (fx+, fl<=?, string-set!, ...) are given
 ;;; in each section comment.  Definitions are written in terms of
-;;; lib/scmn.mvh primitives, as i.c is written in terms of n.h.
+;;; srt/scmn.mvh primitives, as i.c is written in terms of n.h.
 ;;;
 ;;; CONVENTION -- Skint's accumulator discipline, mapped to MARV.
 ;;; In i.c every instruction fragment reads its first operand from
@@ -40,7 +40,7 @@
 ;;;     sequence before using them (word counts:
 ;;;     $scmn:pair_bsz, $scmn:box_bsz, $scmn:vector_bsz,
 ;;;     $scmn:string_bsz).  The allocation itself is delegated to
-;;;     the xxx_slow_hreserved procedures in lib/scmi.c (see the
+;;;     the xxx_slow_hreserved procedures in srt/scmi.c (see the
 ;;;     declarations below): each takes a result-cell pointer and
 ;;;     the current $hp, returns the updated $hp, and writes its
 ;;;     result object into the cell pointed to.
@@ -71,21 +71,21 @@
 ;;; set a flag local and return after the macro use (see
 ;;; marv-macro-test/test-lib.mvs).
 ;;;
-;;; Object representation: see lib/scmn.mvh.  Only #f (0) is false,
+;;; Object representation: see srt/scmn.mvh.  Only #f (0) is false,
 ;;; so an $ac holding a Scheme boolean tests directly with
 ;;; (i64.ne (local.get $ac) (i64.const 0)).
 
 (interface $scmi
 
   ;; The $ac-convention allocating macros deliver their result
-  ;; through this cell (owned by lib/scmi.c, not a GC root: it
+  ;; through this cell (owned by srt/scmi.c, not a GC root: it
   ;; never holds a live pointer across a collection).  It is
   ;; what lets every caller's $r be a pure root array again --
   ;; no slot is reserved for the instructions' own use.
   (data $ac_scratch var align 8 (size 8))
 
   ;; ================================================================
-  ;; Callable generic-numeric implementations (lib/scmi.c).  The
+  ;; Callable generic-numeric implementations (srt/scmi.c).  The
   ;; macros below keep the both-fixnums fast path and the $ac /
   ;; operand-stack calling convention inline; everything else --
   ;; mixed fixnum/flonum dispatch, overflow promotion, floored
@@ -115,7 +115,7 @@
   (func $expt_slow (param $a i64) (param $b i64) (result i64))
   (func $exact_slow (param $a i64) (result i64))
 
-  ;; Allocating instructions (lib/scmi.c), xxx_slow_hreserved
+  ;; Allocating instructions (srt/scmi.c), xxx_slow_hreserved
   ;; convention: the caller has already hreserve'd the whole
   ;; allocation (no collection can occur inside), the first two
   ;; arguments are the result-cell pointer and the current $hp,
@@ -732,7 +732,7 @@
   ;; 536870911, n.h), and a flonum otherwise -- fixnum overflow
   ;; promotes, it never wraps and never traps.
   ;; Slow path: any flonum operand (or overflow above) goes
-  ;; through the callable generic implementations in lib/scmi.c
+  ;; through the callable generic implementations in srt/scmi.c
   ;; ($scmi:add_slow and friends), which convert each operand on
   ;; its own tag -- mixed fixnum/flonum pairs included -- and
   ;; produce a flonum.  Flonums are immediates (~bits), so no
