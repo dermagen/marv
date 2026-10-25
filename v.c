@@ -761,7 +761,7 @@ void cc_func(const mod_t *pm, const fn_t *pf, FILE *fp)
           fputs(");\n", fp);
           off += 16;
         }
-        fprintf(fp, "  return (marv_ptr)tc_%s;\n", symname(letters));
+        fprintf(fp, "  return (%s)tc_%s;\n", cc_type(pf->res), symname(letters));
         fputs("#endif\n", fp);
         break;
       }

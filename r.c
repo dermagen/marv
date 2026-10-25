@@ -1528,11 +1528,13 @@ void mod_declare(mod_t *pm, snode_t *pn)
   } else if (streql(h, "func") || streql(h, "trampoline_func")) {
     declare_func(pm, pn);
     alias_last_sig(pm);
-    if (streql(h, "trampoline_func") && buflen(&pm->sigs) >= 2) {
+    if (streql(h, "trampoline_func") && buflen(&pm->sigs) >= 1) {
       sig_t *ps;
       sym_t letters;
-      /* the alias went on the back, so the function itself is before it */
-      ps = (sig_t *)bufref(&pm->sigs, buflen(&pm->sigs) - 2);
+      /* the alias went on the back when there is one, so the function itself
+       * is before it; a module's own function gets no alias and is last */
+      ps = (sig_t *)bufref(&pm->sigs,
+                            buflen(&pm->sigs) - 1 - ((g_iface != 0) ? 1 : 0));
       if (ps->res != VT_PTR && ps->res != VT_I64)
         sneprintf(pn, "a trampoline_func returns ptr or i64, not %s", vtname(ps->res));
       letters = sig_letters(ps);
