@@ -16,7 +16,7 @@ $(info prefix is set to $(PREFIX))
 
 all: marv
 
-marv: m.c r.c v.c a.c
+marv: m.c r.c v.c a.c m.h r.h v.h a.h
 	$(CC) $(CFLAGS) -D PREFIX=$(DATADIR)/ $(LDFLAGS) -o $@ m.c r.c v.c a.c $(LDLIBS)
 
 test check: marv

@@ -1,6 +1,8 @@
 # MARV Technical Specification & Backend Writer's Guide
 
-This document specifies the **MARV** intermediate language, its source (`.mvs`) and interface header (`.mvh`) file formats, its instruction set, its calling conventions across all compilation targets (`wcpl`, `cc`, and `rv64g`), and how to write single-source library adapters in `lib/`.
+This document specifies the **MARV** intermediate language: its source (`.mvs`), interface header (`.mvh`) and target description (`.mvt`) file formats, its type system and memory model, its instruction set, its calling conventions across every compilation target (`wcpl`, `cc` and `rv64g`), and how to write the single-source C adapters that back a `lib/` interface.
+
+The compiler's own command line is in [the command-line reference](cli.md).
 
 ---
 
@@ -15,6 +17,8 @@ This document specifies the **MARV** intermediate language, its source (`.mvs`) 
 7. [High-Level Forms (Constants, Records, Variadics)](#7-high-level-forms-constants-records-variadics)
 8. [ABI & Calling Conventions](#8-abi--calling-conventions)
 9. [Standard Library (`lib/`) & Writing C Adapters](#9-standard-library-lib--writing-c-adapters)
+
+The compiler's options, operating modes and lookup paths: [command-line reference](cli.md).
 
 ---
 

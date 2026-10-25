@@ -115,7 +115,7 @@ For the complete language specification, instruction set reference, calling conv
 
 ## Building & Installation
 
-MARV ships with self-contained, pre-generated C sources (`m.c`, `r.c`, `v.c`, and `a.c` in the repository root, compiled from the corresponding units in `src/sf/` by [#F](https://github.com/false-schemers/sharpF)) that build with any standard C compiler without external dependencies.
+The compiler is four C translation units in the repository root — `m.c`, `r.c`, `v.c` and `a.c`, each with its own header — and builds with any C99 compiler. It has no external dependencies beyond the C library and `-lm`.
 
 ### Unix-like Systems (Linux, macOS, BSD)
 
@@ -126,9 +126,9 @@ Optionally run `./configure` to set a custom installation `PREFIX` (defaults to 
 make
 ```
 
-`Makefile` compiles `m.c r.c v.c a.c` with `-D PREFIX=$(PREFIX)/share/marv/`, embedding `$(PREFIX)/share/marv/target` and `$(PREFIX)/share/marv/lib` into `marv`'s default target and library search paths alongside local `target/` and `lib/`.
+`Makefile` compiles the four units with `-D PREFIX=$(PREFIX)/share/marv/`, embedding `$(PREFIX)/share/marv/target` and `$(PREFIX)/share/marv/lib` into `marv`'s default target and library search paths alongside local `target/` and `lib/`.
 
-You can also compile the four C files directly with your C compiler (with or without `-D PREFIX`):
+You can also compile the four units directly with your C compiler (with or without `-D PREFIX`):
 
 ```sh
 cc -O2 -D PREFIX=/usr/local/share/marv/ -o marv m.c r.c v.c a.c -lm
@@ -149,7 +149,7 @@ make CC=clang install
 
 ### Windows (MSVC / `cl`)
 
-Open a **Developer Command Prompt for Visual Studio** (x64 or x86 Native Tools Command Prompt) in the repository root and compile the four C sources with `cl`:
+Open a **Developer Command Prompt for Visual Studio** (x64 or x86 Native Tools Command Prompt) in the repository root and compile the four units with `cl`:
 
 ```bat
 cl /nologo /O2 /Fe:marv.exe m.c r.c v.c a.c
@@ -162,25 +162,17 @@ marv.exe -t cl -o queens.exe examples\queens.mvs
 queens.exe
 ```
 
-### Running from R7RS Scheme Source (`skint`)
-
-Alternatively, you can run the R7RS Scheme implementation (`src/skint/marv.scm`) directly using [Skint](https://github.com/false-schemers/skint):
-
-```sh
-skint -p src/skint/marv.scm -t cc -o queens examples/queens.mvs
-```
-
 ---
 
 ## Repository Layout
 
-- `m.c`, `r.c`, `v.c`, `a.c` — Standalone C sources of the MARV compiler & linker driver (compiled from `src/sf/m.sf`, `src/sf/r.sf`, `src/sf/v.sf`, and `src/sf/a.sf` by `#F`).
+- `m.c`, `r.c`, `v.c`, `a.c` and `m.h`, `r.h`, `v.h`, `a.h` — The compiler and linker driver: the runtime library, the reader and front end, the three target writers, and the command-line driver.
 - `configure` — Optional configuration script (`./configure --prefix=PATH`) that writes `config.mk`.
 - `Makefile` — Build and installation rules for Unix-like systems.
-- [`doc/`](doc/README.md) — Complete MARV technical specification, instruction reference, calling conventions, and `lib/` adapter authoring guide.
-- [`src/`](src/README.md) — Compiler source code (`src/sf/` `#F` source, `src/skint/marv.scm` R7RS Scheme source) and CLI reference.
+- [`doc/`](doc/README.md) — The MARV specification: lexical structure, the three file formats, the type system, the instruction set, calling conventions, and how to write a `lib/` adapter.
+- [`doc/cli.md`](doc/cli.md) — Command-line reference: options, the two operating modes, and the lookup paths.
 - [`lib/`](lib/README.md) — Standard library `.mvh` headers and single-source `.c` adapters (`lib/*.mvh`, `lib/*.c`).
-- [`srt/`](srt/README.md) — Runtime support for Scheme code compiled to MARV; maintained with the S-MARV compiler, not with MARV (`srt/*.mvh`, `srt/*.c`).
+- [`srt/`](srt/README.md) — Runtime support for Scheme code compiled to MARV (`srt/*.mvh`, `srt/*.c`).
 - [`target/`](target/README.md) — Target description files (`target/*.mvt`) for `wcpl`, `cc`, `gcc`, `clang`, `cl`, and `rv64g`.
 - [`examples/`](examples/README.md) — Single-module and multi-module `.mvs`/`.mvh` example programs.
 - [`test/`](test/README.md) — Unit, RV64G simulator, and end-to-end target test suite.

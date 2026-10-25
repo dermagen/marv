@@ -1,29 +1,9 @@
-# MARV Compiler Command-Line Interface
+# MARV Command-Line Reference
 
-The MARV compiler and build driver is provided in two forms:
-
-1. **Standalone C Sources (`m.c`, `r.c`, `v.c`, `a.c` / `src/sf/`)** — Compiled by the [#F (`sfc`)](https://github.com/false-schemers/sharpF) Scheme-to-C compiler from the four compilation units in `src/sf/`:
-   - `m.sf` — the LibL runtime library (base unit),
-   - `r.sf` — the compiler proper (parser, flattening, emitters),
-   - `v.sf` — interface loading, lowering, target descriptions, and the linker runner,
-   - `a.sf` — the driver (command-line parsing and `main`).
-
-   Compile the generated C files in the repository root via `make` or directly with a C compiler:
-   ```sh
-   cc -O2 -o marv m.c r.c v.c a.c -lm
-   ```
-   Or on Windows with MSVC (`cl`):
-   ```bat
-   cl /nologo /O2 /Fe:marv.exe m.c r.c v.c a.c
-   ```
-   To regenerate the C sources from `src/sf/` with `sfc` and refresh the copies in the repository root:
-   ```sh
-   cd src/sf && sfc m.sf r.sf v.sf a.sf && cp m.c r.c v.c a.c ../..
-   ```
-2. **R7RS Scheme Source (`src/skint/marv.scm`)** — Runs directly as a standard R7RS Scheme program on [Skint](https://github.com/false-schemers/skint):
-   ```sh
-   skint -p src/skint/marv.scm ...
-   ```
+`marv` compiles MARV module sources (`.mvs`) to one of its targets and, when
+asked, drives the target's own compiler and linker to produce an executable.
+The target is named by a target description file (`.mvt`); see
+[the specification](README.md) 2.3 for how to write one.
 
 ## Synopsis
 
@@ -44,7 +24,7 @@ marv -t TARGDES [-c] [OPTION]... FILE...
 | `-v` | `--verbose` | *(none)* | Print each compilation step line and the linker command line to `stderr` before executing. |
 | `-h` | `--help` | *(none)* | Display command-line usage and options. |
 
-Options follow standard POSIX syntax (parsed via `(skint getopt)`): short flags may be clustered (e.g. `-vc`), and option arguments may be passed either separately (`-t cc`, `-o app`) or attached (`-tcc`, `--target=cc`, `--output=app`).
+Options follow standard POSIX syntax: short flags may be clustered (e.g. `-vc`), and option arguments may be passed either separately (`-t cc`, `-o app`) or attached (`-tcc`, `--target=cc`, `--output=app`).
 
 ---
 

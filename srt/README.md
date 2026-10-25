@@ -15,10 +15,10 @@ beside it where there is one, and the same `rp$` and `ap$` conventions.
 
 | File | What it is |
 | --- | --- |
-| `scmrt.mvh`, `scmrt.c` | The runtime: the heap, the Cheney collector, the payload and wrapper services. The counterpart of Skint's runtime. |
+| `scmrt.mvh`, `scmrt.c` | The runtime: the heap, the Cheney collector, the payload and wrapper services. |
 | `scmrt.h` | The `$scmrt` payload and wrapper services as other WCPL C modules see them. |
-| `scmn.mvh` | Object primitives: the NaN-boxed representation, the accessors, the constructors. The counterpart of Skint's `n.h`/`n.c`. |
-| `scmi.mvh`, `scmi.c` | Instruction macros and the callable slow paths behind them. The counterpart of Skint's `i.c`. |
+| `scmn.mvh` | Object primitives: the NaN-boxed representation, the accessors, the constructors. |
+| `scmi.mvh`, `scmi.c` | Instruction macros and the callable slow paths behind them. |
 
 ## Using them
 
