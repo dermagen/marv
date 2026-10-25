@@ -220,7 +220,7 @@ Inside `(interface ...)`:
 (global $errno (mut i32))
 ```
 
-### 4.3 Function Definitions (`func`)
+### 4.3 Function Definitions (`func`, `trampoline_func`)
 
 Inside `(module ...)`:
 
@@ -235,6 +235,31 @@ Inside `(module ...)`:
 ```
 
 All `(param ...)`, `(result ...)`, `(frame ...)`, and `(local ...)` declarations must precede the instruction body.
+
+A `trampoline_func` is declared and written exactly like a `func`, and is
+where a chain of tail calls containing `trampoline_jump` (Section 6.3) is
+entered and where it comes back to:
+
+```scheme
+(trampoline_func $run [(export "external_name")]
+  (param $p1 <type>) ...
+  (result ptr)                       ;; or i64: the chain's own return channel
+  <instr> ...)                       ;; a body whose last act starts the chain
+```
+
+Its body makes the first transfer into the chain, by `call` or `return_call`,
+and every `trampoline_jump` in that chain comes back to this function rather
+than to its own caller. Calling a `trampoline_func` is an ordinary call: the
+chain is entirely inside it, and it returns when the chain does.
+
+A chain ends by returning the null pointer, so a `trampoline_func` is itself a
+legal member of an enclosing chain and they nest. Because the return channel
+carries the protocol, a chain that computes a result leaves it somewhere the
+initiator owns — a `(frame N)` slot of the caller, a `global`, or a `data`
+segment — rather than returning it.
+
+Every signature reached by a `trampoline_jump` needs a `trampoline_func` that
+enters it; a jump whose signature has none is an error.
 
 ### 4.4 Assembler Macros (`macro`)
 
@@ -473,6 +498,29 @@ Flat syntax `block [$lbl] [(result T)] ... end [$lbl]`, `loop [$lbl] [(result T)
   (return_call_indirect (param T1 T2 ...) [(result R)] <arg1> <arg2> ... <callee_ptr>)
   ```
   Tail calls tear down the current activation frame (including `(frame N)` and saved registers) before transferring control, guaranteeing $O(1)$ stack usage.
+- **Resetting Tail Call (`trampoline_jump`):**
+  ```scheme
+  (trampoline_jump $fn <arg1> <arg2> ...)
+  ```
+  A tail call that also lets the chain containing it return to a fixed depth.
+  It transfers control exactly as `return_call` does, and the function it
+  names is entered with the arguments given.
+
+  A `trampoline_jump` is **not** what a tail call compiles to. It is what a
+  chain of tail calls does once in a while: a stretch of `return_call`s, then
+  one `trampoline_jump`, then the next stretch. Two rules make it well formed:
+
+  - The enclosing function returns `ptr` or `i64`.
+  - The function it names has a signature that some `(trampoline_func ...)` in
+    the program enters, and is reached only by a transfer within the chain —
+    never by an ordinary `call`.
+
+  Where the chain runs is a decision for whatever emits the MARV module, and
+  one `trampoline_jump` on every loop back edge and every transfer between
+  procedures is enough. MARV does not check that the decision was made: a
+  chain with no `trampoline_jump` in a cycle is accepted, and on a target whose
+  compiler guarantees a jump for every tail call it runs in bounded stack, so
+  the omission shows only where that guarantee is absent.
 
 ---
 
