@@ -2661,6 +2661,12 @@ static void u_form(unst_t *pu, snode_t *pn)
 
   pin = instr_lookup(head);
   if (pin == NULL) sneprintf(pn, "unknown instruction %s", h);
+  /* nimm is how many immediates the form may carry, not how many it must:
+   * a load's offset and align are optional keywords.  What is certain is that
+   * an instruction taking any immediate needs something after the head, and
+   * the readers below index that position without looking. */
+  if (pin->nimm > 0 && snlen(pn) < 2)
+    sneprintf(pn, "%s takes an immediate operand", h);
 
   /* immediates come first in the form, then the folded operands */
   first = 1 + (size_t)pin->nimm;

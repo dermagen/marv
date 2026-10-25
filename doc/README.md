@@ -27,14 +27,13 @@ The compiler's options, operating modes and lookup paths: [command-line referenc
 MARV `.mvs` and `.mvh` files are sequences of S-expressions using a subset of R7RS Scheme lexical syntax extended with SRFI-270 hexadecimal floating-point literals:
 
 - **Whitespace and Comments:**
-  - Line comments start with `;` and extend to the end of the line.
-  - Block comments are delimited by `#|` and `|#` (and may nest).
-  - Datum comments `#;<datum>` discard the following S-expression.
+  - Line comments start with `;` and extend to the end of the line. They are
+    the only comment syntax.
 - **Identifiers (Symbols):**
   - Module names, function names, globals, data labels, record names, field names, local variables, and block/loop labels are written with a leading `$` sigil (e.g. `$main`, `$vec3`, `$stdio:snprintf`, `$L_exit`).
   - Cross-module references use `$module:name` (where `module` may contain dots for nested namespaces, e.g. `$math.vec:cross`).
 - **Integer Literals:**
-  - Signed or unsigned decimal (`0`, `-42`, `1234567890123`), hexadecimal (`#x73025164`, `#x-10`), octal (`#o755`), or binary (`#b1010`).
+  - Signed or unsigned decimal (`0`, `-42`, `1234567890123`) or hexadecimal (`#x73025164`, `#x-10`).
   - `i32.const` normalizes its immediate to a signed 32-bit two's-complement integer (`[-2147483648, 2147483647]`).
   - `i64.const` normalizes its immediate to a signed 64-bit two's-complement integer (`[-9223372036854775808, 9223372036854775807]`).
 - **Floating-Point Literals:**
@@ -46,7 +45,10 @@ MARV `.mvs` and `.mvh` files are sequences of S-expressions using a subset of R7
     ```
 - **String Literals:**
   - Enclosed in double quotes `"..."`, used in `(export "...")`, `(import "..." "..." ...)`, and `(data ...)` byte segments.
-  - Supported escapes: `\n` (`0x0A`), `\t` (`0x09`), `\r` (`0x0D`), `\\`, `\"`, R7RS hex escapes `\x<hex>;` (e.g. `\x00;`), and two-digit hex escapes `\00`.
+  - Supported escapes: `\n` (`0x0A`), `\t` (`0x09`), `\r` (`0x0D`), `\\`, `\"`, and R7RS hex escapes `\x<hex>;` (e.g. `\x00;`, `\x41;`). There is no other escape form, so a byte
+    without an escape of its own is written `\x<hex>;`.
+- **Bytevector Literals:**
+  - `#u8(<byte> ...)`, with decimal or hexadecimal byte values, is accepted wherever a string literal is, which in practice means inside a `(data ...)` segment: `#u8(65 66 0)` and `"AB\x00;"` are the same three bytes.
 
 ---
 
@@ -170,6 +172,7 @@ Inside `(module ...)`:
 - Optional `(export "external_name")`.
 - Data items in structured initializers:
   - `"..."` — raw string bytes
+  - `#u8(...)` — raw bytes, written as byte values
   - `(size N)` or `size N` — `N` zero bytes
   - `(i8 v...)` — 1-byte integers
   - `(i16 v...)` — 2-byte integers
