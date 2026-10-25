@@ -813,6 +813,57 @@ void cc_func(const mod_t *pm, const fn_t *pf, FILE *fp)
         fputs("#endif\n", fp);
         break;
       }
+      case IR_TJUMPI: {
+        sym_t letters;
+        size_t k, n;
+        int off;
+        letters = pi->sig;
+        if (letters == 0) {
+          fprintf(stderr, "marv: a trampoline_jump_indirect with no chain shape\n");
+          exit(1);
+        }
+        n = buflen(&pi->args);          /* the arguments, then the callee */
+        if (n == 0) {
+          fprintf(stderr, "marv: a trampoline_jump_indirect with no callee\n");
+          exit(1);
+        }
+        fputs("#ifdef MARV_TAILCALL_GUARANTEE\n", fp);
+        fprintf(fp, "  MARV_MUSTTAIL return ((%s (*)(", cc_type(pi->vt));
+        if (n == 1) fputs("void", fp);
+        else for (k = 0; k + 1 < n; ++k) {
+          if (k > 0) fputs(", ", fp);
+          fputs(cc_type(((opnd_t *)bufref(&pi->args, k))->vt), fp);
+        }
+        fputs("))(", fp);
+        cc_opnd((opnd_t *)bufref(&pi->args, n - 1), mod, fp);
+        fputs(")(", fp);
+        for (k = 0; k + 1 < n; ++k) {
+          if (k > 0) fputs(", ", fp);
+          cc_opnd((opnd_t *)bufref(&pi->args, k), mod, fp);
+        }
+        fputs(");\n", fp);
+        fputs("#else\n", fp);
+        fprintf(fp, "  MARV_STORE(i32, tc_%s, 0, %lu);\n", symname(letters),
+                (unsigned long)(n - 1));
+        fputs("  MARV_STORE(ptr, tc_", fp);
+        fputs(symname(letters), fp);
+        fputs(", 8, ", fp);
+        cc_opnd((opnd_t *)bufref(&pi->args, n - 1), mod, fp);
+        fputs(");\n", fp);
+        off = 16;
+        for (k = 0; k + 1 < n; ++k) {
+          opnd_t *pa;
+          pa = (opnd_t *)bufref(&pi->args, k);
+          fprintf(fp, "  MARV_STORE(%s, tc_%s, %d, ",
+                  cc_slotname(pa->vt), symname(letters), off);
+          cc_opnd(pa, mod, fp);
+          fputs(");\n", fp);
+          off += 16;
+        }
+        fprintf(fp, "  return (%s)tc_%s;\n", cc_type(pf->res), symname(letters));
+        fputs("#endif\n", fp);
+        break;
+      }
       case IR_CALL: case IR_RETCALL:
         fputs("  ", fp);
         if (pi->op == IR_RETCALL) fputs("MARV_MUSTTAIL return ", fp);
@@ -1602,9 +1653,11 @@ static void wo_form(snode_t *pn, int ind, FILE *fp)
       if (nparam > 0) cbputs(")", &sigb);
       cbputc(0, &sigb);
       for (i = k; i < snlen(pn); ++i) wo_form(snref(pn, i), ind, fp);
-      if (streql(h, "return_call_indirect")) wo_unframe(ind, fp);
+      if (streql(h, "return_call_indirect")
+          || streql(h, "trampoline_jump_indirect")) wo_unframe(ind, fp);
       wo_ind(ind, fp);
-      fprintf(fp, "%s%s\n", streql(h, "return_call_indirect")
+      fprintf(fp, "%s%s\n", (streql(h, "return_call_indirect")
+              || streql(h, "trampoline_jump_indirect"))
               ? "return_call_indirect" : "call_indirect", (const char *)cbdata(&sigb));
       cbfini(&sigb);
       return;
@@ -1641,7 +1694,8 @@ static bool wo_terminates(snode_t *pn)
   h = symname(snref(pn, 0)->sym);
   if (streql(h, "return") || streql(h, "br") || streql(h, "br_table")
       || streql(h, "unreachable") || streql(h, "return_call")
-      || streql(h, "return_call_indirect") || streql(h, "trampoline_jump"))
+      || streql(h, "return_call_indirect") || streql(h, "trampoline_jump")
+      || streql(h, "trampoline_jump_indirect"))
     return true;
   if (streql(h, "seq") || streql(h, "then") || streql(h, "else")) {
     if (snlen(pn) < 2) return false;
@@ -2868,7 +2922,7 @@ static void rv_un(const char *op, const char *d, const char *s, FILE *fp)
   exit(1);
 }
 
-static void rv_args(ir_t *pi, size_t first, FILE *fp);
+static void rv_args(ir_t *pi, size_t first, size_t last, FILE *fp);
 static void rv_teardown(FILE *fp);
 static void rv_ins(ir_t *pi, FILE *fp);
 
@@ -3117,7 +3171,7 @@ static void rv_ins(ir_t *pi, FILE *fp)
     }
     case IR_CALL: case IR_CALLI: {
       sig_t *ps;
-      rv_args(pi, (pi->op == IR_CALLI) ? 1 : 0, fp);
+      rv_args(pi, 0, buflen(&pi->args) - ((pi->op == IR_CALLI) ? 1 : 0), fp);
       if (pi->op == IR_CALLI) {
         opnd_t *pt;
         pt = (opnd_t *)bufref(&pi->args, 0);
@@ -3136,12 +3190,14 @@ static void rv_ins(ir_t *pi, FILE *fp)
       }
       return;
     }
-    case IR_TJUMP: case IR_RETCALL: case IR_RETCALLI: {
+    case IR_TJUMP: case IR_TJUMPI: case IR_RETCALL: case IR_RETCALLI: {
       sig_t *ps;
-      rv_args(pi, (pi->op == IR_RETCALLI) ? 1 : 0, fp);
-      if (pi->op == IR_RETCALLI) {
+      bool ind;
+      ind = (pi->op == IR_RETCALLI || pi->op == IR_TJUMPI);
+      rv_args(pi, 0, buflen(&pi->args) - (ind ? 1 : 0), fp);
+      if (ind) {
         opnd_t *pt;
-        pt = (opnd_t *)bufref(&pi->args, 0);
+        pt = (opnd_t *)bufref(&pi->args, buflen(&pi->args) - 1);
         l = rv_opnd(pt, "a7", fp);
         if (!streql(l, "a7")) fprintf(fp, "  mv a7, %s\n", l);
         rv_teardown(fp);
@@ -3319,12 +3375,12 @@ static void rv_teardown(FILE *fp)
  * the scratch and then moved.  That is safe because the allocator hands out
  * only the argument registers above every call's own arity in this function,
  * so no argument register a call writes is any value's home.  [cco] */
-static void rv_args(ir_t *pi, size_t first, FILE *fp)
+static void rv_args(ir_t *pi, size_t first, size_t last, FILE *fp)
 {
   size_t i;
   int gi, fi, st;
   gi = 0; fi = 0; st = 0;
-  for (i = first; i < buflen(&pi->args); ++i) {
+  for (i = first; i < last; ++i) {
     opnd_t *pa;
     const char *sreg;
     pa = (opnd_t *)bufref(&pi->args, i);

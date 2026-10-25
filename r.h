@@ -154,7 +154,8 @@ typedef enum iop {
   IR_GGET, IR_GSET, IR_LABEL, IR_JUMP, IR_BRFALSE, IR_BRTRUE, IR_BRTABLE,
   IR_LOOPBEG, IR_LOOPEND, IR_UNREACHABLE,
   IR_CALL, IR_CALLI, IR_RETCALL, IR_RETCALLI, IR_RETURN,
-  IR_TJUMP                 /* a return_call that also resets the stack */
+  IR_TJUMP,                /* a return_call that also resets the stack */
+  IR_TJUMPI                /* the same, to a callee given by value */
 } iop_t;
 
 typedef struct ir {

@@ -478,6 +478,7 @@ static const instr_t g_instrtab_[] = {
   { "call_indirect",        IK_CALL_INDIRECT,      1, 0, { VT_VOID },               VT_ANY,  0 },
   { "return_call",          IK_RETURN_CALL,        1, 0, { VT_VOID },               VT_VOID, 0 },
   { "trampoline_jump",      IK_RETURN_CALL,        1, 0, { VT_VOID },               VT_VOID, 0 },
+  { "trampoline_jump_indirect", IK_RETURN_CALL_INDIRECT, 1, 0, { VT_VOID },         VT_VOID, 0 },
   { "return_call_indirect", IK_RETURN_CALL_INDIRECT, 1, 0, { VT_VOID },               VT_VOID, 0 },
   { "ptr.add",              IK_BINARY,             0, 2, { VT_PTR, VT_I32 },        VT_PTR,  8 },
   { "ptr.add64",            IK_BINARY,             0, 2, { VT_PTR, VT_I64 },        VT_PTR,  8 },
@@ -2230,7 +2231,7 @@ static void u_macro(unst_t *pu, snode_t *pn, mac_t *px)
         iop_t last;
         last = ((ir_t *)bufref(&pu->fn->code, buflen(&pu->fn->code) - 1))->op;
         dead = (last == IR_RETURN || last == IR_JUMP || last == IR_RETCALL
-                || last == IR_TJUMP
+                || last == IR_TJUMP || last == IR_TJUMPI
                 || last == IR_RETCALLI || last == IR_UNREACHABLE || last == IR_BRTABLE);
       }
       if (!dead && now + nin >= depth) {
@@ -2345,7 +2346,7 @@ static bool u_terminates(snode_t *pn)
   h = symname(snref(pn, 0)->sym);
   return streql(h, "return") || streql(h, "br") || streql(h, "unreachable")
       || streql(h, "return_call") || streql(h, "return_call_indirect")
-      || streql(h, "trampoline_jump");
+      || streql(h, "trampoline_jump") || streql(h, "trampoline_jump_indirect");
 }
 
 static bool u_seq_terminates(snode_t *pn, size_t from)
@@ -2482,11 +2483,14 @@ static void u_form(unst_t *pu, snode_t *pn)
   sym_t head;
   size_t i, first, ciargs;
   vt_t cires;
+  vt_t citps[16];              /* an indirect form's stated parameter types */
+  int ncitps;
   opnd_t o, a, b, c;
   ir_t *pi;
 
   ciargs = 0;
   cires = VT_VOID;
+  ncitps = 0;
   pu->at = pn;
   if (pn->nt == SN_SYM) {             /* $x as an operand is (local.get $x) */
     const char *vn;
@@ -2679,7 +2683,19 @@ static void u_form(unst_t *pu, snode_t *pn)
       const char *k;
       k = symname(snref(snref(pn, first), 0)->sym);
       if (streql(k, "type")) { first += 1; continue; }          /* (type ...) */
-      if (streql(k, "param")) { ciargs += 1; first += 1; continue; }
+      if (streql(k, "param")) {          /* (param T ...): every type counts */
+        size_t ci;
+        for (ci = 1; ci < snlen(snref(pn, first)); ++ci) {
+          snode_t *pt;
+          pt = snref(snref(pn, first), ci);
+          if (pt->nt == SN_SYM) {
+            if (ncitps < 16) citps[ncitps] = vt_of_sym(pt->sym);
+            ncitps += 1;
+          }
+        }
+        ciargs = (size_t)ncitps;
+        first += 1; continue;
+      }
       if (streql(k, "result")) {                                /* (result T) */
         snode_t *pt;
         pt = snref(snref(pn, first), snlen(snref(pn, first)) - 1);
@@ -2910,23 +2926,38 @@ static void u_form(unst_t *pu, snode_t *pn)
       size_t nargs, have, k;
       sig_t *ps;
       vt_t res;
+      sym_t tjump_letters;
       indirect = (pin->kind == IK_CALL_INDIRECT || pin->kind == IK_RETURN_CALL_INDIRECT);
-      if (streql(h, "trampoline_jump")) {
+      tjump_letters = 0;
+      if (streql(h, "trampoline_jump") || streql(h, "trampoline_jump_indirect")) {
         size_t ti;
         sym_t letters;
         bool known;
         if (pu->fn->res != VT_PTR && pu->fn->res != VT_I64)
           sneprintf(pn, "a trampoline_jump needs its function to return ptr or i64, not %s",
                     vtname(pu->fn->res));
-        ps = mod_sig(pu->mod, snref(pn, 1)->sym);
-        if (ps == NULL) sneprintf(pn, "unknown function %s", symname(snref(pn, 1)->sym));
-        letters = sig_letters(ps);
+        if (indirect) {
+          /* no callee to look up: the shape is the one the form states */
+          cbuf_t lb;
+          int ci;
+          cbinit(&lb);
+          cbputc(sig_letter(cires), &lb);
+          for (ci = 0; ci < ncitps; ++ci) cbputc(sig_letter(citps[ci]), &lb);
+          cbputc(0, &lb);
+          letters = intern((const char *)cbdata(&lb));
+          cbfini(&lb);
+        } else {
+          ps = mod_sig(pu->mod, snref(pn, 1)->sym);
+          if (ps == NULL) sneprintf(pn, "unknown function %s", symname(snref(pn, 1)->sym));
+          letters = sig_letters(ps);
+        }
         known = false;
         for (ti = 0; ti < buflen(&pu->mod->tramps); ++ti)
           if (*(sym_t *)bufref(&pu->mod->tramps, ti) == letters) { known = true; break; }
         if (!known)
           sneprintf(pn, "no trampoline_func takes the shape %s that this jump needs",
                     symname(letters));
+        tjump_letters = letters;
       }
       tail = (pin->kind == IK_RETURN_CALL || pin->kind == IK_RETURN_CALL_INDIRECT);
       res = VT_VOID;
@@ -2941,9 +2972,10 @@ static void u_form(unst_t *pu, snode_t *pn)
         res = cires;
       }
       pi = u_emit(pu, streql(h, "trampoline_jump") ? IR_TJUMP
+                      : streql(h, "trampoline_jump_indirect") ? IR_TJUMPI
                       : (tail ? (indirect ? IR_RETCALLI : IR_RETCALL)
                               : (indirect ? IR_CALLI : IR_CALL)));
-      if (streql(h, "trampoline_jump") && ps != NULL) pi->sig = sig_letters(ps);
+      if (tjump_letters != 0) pi->sig = tjump_letters;
       if (!indirect) pi->name = (ps != NULL && ps->cname != 0) ? ps->cname
                                                               : snref(pn, 1)->sym;
       have = buflen(&pu->stk);
