@@ -595,6 +595,54 @@ static const char *cc_memtype(const char *op)
   return "i32";
 }
 
+/* A function whose name its module's interface declares is the module's
+ * contract with other modules: its definition must carry external linkage
+ * even without an (export "..."), whose business is the extra unqualified
+ * alias.  Otherwise the extern declaration cc_decls_write took from the
+ * interface meets a static definition and the C compiler refuses both. */
+static bool cc_iface_visible(const mod_t *pm, const fn_t *pf)
+{
+  sig_t *pl;
+  size_t i;
+  pl = mod_sig((mod_t *)pm, pf->name);
+  if (pl == NULL || pl->cname == 0) return false;
+  for (i = 0; i < buflen(&((mod_t *)pm)->sigs); ++i) {
+    sig_t *ps;
+    ps = (sig_t *)bufref(&((mod_t *)pm)->sigs, i);
+    if (ps->cname == pl->cname && !ps->local) return true;
+  }
+  return false;
+}
+
+/* the same for an interface-declared global or data segment */
+static bool cc_glb_iface_visible(const mod_t *pm, sym_t name)
+{
+  sym_t cn;
+  size_t i;
+  cn = mod_globalname((mod_t *)pm, name);
+  if (cn == 0) return false;
+  for (i = 0; i < buflen(&((mod_t *)pm)->globals); ++i) {
+    glb_t *pg;
+    pg = (glb_t *)bufref(&((mod_t *)pm)->globals, i);
+    if (pg->cname == cn && !pg->local) return true;
+  }
+  return false;
+}
+
+static bool cc_dat_iface_visible(const mod_t *pm, sym_t name)
+{
+  sym_t cn;
+  size_t i;
+  cn = mod_dataname((mod_t *)pm, name);
+  if (cn == 0) return false;
+  for (i = 0; i < buflen(&((mod_t *)pm)->datas); ++i) {
+    dat_t *pd;
+    pd = (dat_t *)bufref(&((mod_t *)pm)->datas, i);
+    if (pd->cname == cn && !pd->local) return true;
+  }
+  return false;
+}
+
 static void cc_alias(const fn_t *pf, const char *mod, FILE *fp);
 
 void cc_func(const mod_t *pm, const fn_t *pf, FILE *fp)
@@ -608,7 +656,7 @@ void cc_func(const mod_t *pm, const fn_t *pf, FILE *fp)
   cbputc(0, &mn);
   mod = (const char *)cbdata(&mn);
 
-  fputs((pf->expname != 0) ? "" : "static ", fp);
+  fputs((pf->expname != 0 || cc_iface_visible(pm, pf)) ? "" : "static ", fp);
   fprintf(fp, "%s %s_", cc_type(pf->res), mod);
   { cbuf_t nb; cbinit(&nb); cc_ident(symname(pf->name), &nb); cbputc(0, &nb);
     fputs((const char *)cbdata(&nb), fp); cbfini(&nb); }
@@ -1058,7 +1106,8 @@ void cc_static(const mod_t *pm, snode_t *pn, FILE *fp)
     dname = (const char *)cbdata(&db);
     /* a zeroed buffer gets no initializer: one of these is a megabyte */
     fprintf(fp, "%sMARV_ALIGNED(%lld) unsigned char %s[%lu]",
-            exported ? "" : "static ", cc_align(ds.align), dname,
+            (exported || cc_dat_iface_visible(pm, snref(pn, 1)->sym))
+              ? "" : "static ", cc_align(ds.align), dname,
             (unsigned long)buflen(&ds.bytes));
     if (!ds.allzero) {
       fputs(" = {", fp);
@@ -1096,7 +1145,9 @@ void cc_static(const mod_t *pm, snode_t *pn, FILE *fp)
     {
       sym_t gn;
       gn = mod_globalname((mod_t *)pm, snref(pn, 1)->sym);
-      fprintf(fp, "%s%s ", exported ? "" : "static ", cc_type(vt));
+      fprintf(fp, "%s%s ",
+              (exported || cc_glb_iface_visible(pm, snref(pn, 1)->sym))
+                ? "" : "static ", cc_type(vt));
       if (gn != 0) fprintf(fp, "%s;\n\n", symname(gn));
       else fprintf(fp, "%s_%s;\n\n", mod, (const char *)cbdata(&nb));
     }
@@ -1590,7 +1641,8 @@ static bool wo_terminates(snode_t *pn)
   h = symname(snref(pn, 0)->sym);
   if (streql(h, "return") || streql(h, "br") || streql(h, "br_table")
       || streql(h, "unreachable") || streql(h, "return_call")
-      || streql(h, "return_call_indirect")) return true;
+      || streql(h, "return_call_indirect") || streql(h, "trampoline_jump"))
+    return true;
   if (streql(h, "seq") || streql(h, "then") || streql(h, "else")) {
     if (snlen(pn) < 2) return false;
     return wo_terminates(snref(pn, snlen(pn) - 1));
@@ -3593,7 +3645,7 @@ void cc_tramp_func(const mod_t *pm, fn_t *pf, FILE *fp)
   cbputc(0, &bn);
 
   /* the wrapper's own header, the same shape as the body's */
-  fputs((realexp != 0) ? "" : "static ", fp);
+  fputs((realexp != 0 || cc_iface_visible(pm, pf)) ? "" : "static ", fp);
   fprintf(fp, "%s %s_", rt, mod);
   { cbuf_t nb; cbinit(&nb); cc_ident(symname(realname), &nb); cbputc(0, &nb);
     fputs((const char *)cbdata(&nb), fp); cbfini(&nb); }
