@@ -2378,15 +2378,37 @@ static ctrl_t *u_ctrl(unst_t *pu, sym_t label)
 static bool u_terminates(snode_t *pn);
 static void u_seq(unst_t *pu, snode_t *pn, size_t from);
 
-/* does this instruction leave the block for good? */
+/* does this instruction leave the block for good? an (if ...) does
+ * when both of its arms do, which is how a tail-recursive body ends */
 static bool u_terminates(snode_t *pn)
 {
   const char *h;
+  size_t i;
+  bool sawthen, sawelse, thenok, elseok;
   if (pn->nt != SN_LIST || snlen(pn) == 0 || snref(pn, 0)->nt != SN_SYM) return false;
   h = symname(snref(pn, 0)->sym);
-  return streql(h, "return") || streql(h, "br") || streql(h, "unreachable")
+  if (streql(h, "return") || streql(h, "br") || streql(h, "unreachable")
       || streql(h, "return_call") || streql(h, "return_call_indirect")
-      || streql(h, "trampoline_jump") || streql(h, "trampoline_jump_indirect");
+      || streql(h, "trampoline_jump") || streql(h, "trampoline_jump_indirect"))
+    return true;
+  if (streql(h, "seq") || streql(h, "then") || streql(h, "else")) {
+    if (snlen(pn) < 2) return false;
+    return u_terminates(snref(pn, snlen(pn) - 1));
+  }
+  if (streql(h, "if")) {
+    sawthen = false; sawelse = false; thenok = false; elseok = false;
+    for (i = 1; i < snlen(pn); ++i) {
+      snode_t *pc;
+      const char *k;
+      pc = snref(pn, i);
+      if (pc->nt != SN_LIST || snlen(pc) == 0 || snref(pc, 0)->nt != SN_SYM) continue;
+      k = symname(snref(pc, 0)->sym);
+      if (streql(k, "then")) { sawthen = true; thenok = u_terminates(pc); }
+      else if (streql(k, "else")) { sawelse = true; elseok = u_terminates(pc); }
+    }
+    return sawthen && sawelse && thenok && elseok;
+  }
+  return false;
 }
 
 static bool u_seq_terminates(snode_t *pn, size_t from)
@@ -3592,9 +3614,12 @@ bool fn_unstack(mod_t *pm, snode_t *pn, fn_t *pf)
   bufinit(&u.stk, sizeof(opnd_t));
   bufinit(&u.ctrl, sizeof(ctrl_t));
   u_seq(&u, &lowered, 1);                      /* the lowered body is a (seq ...) */
-  /* a body that falls off the end returns what it left on the stack */
-  if (buflen(&u.fn->code) == 0
-      || ((ir_t *)bufref(&u.fn->code, buflen(&u.fn->code) - 1))->op != IR_RETURN) {
+  /* A body that falls off the end returns what it left on the stack.
+   * A body whose last form leaves for good (return, tail call,
+   * trampoline jump, ...) must not grow a dead return behind it:
+   * the source-level check sees through the IR labels and jumps a
+   * trailing block/if leaves in the instruction stream. */
+  if (buflen(&u.fn->code) == 0 || !u_seq_terminates(&lowered, 1)) {
     ir_t *pi;
     pi = u_emit(&u, IR_RETURN);
     pi->vt = pf->res;

@@ -3669,10 +3669,20 @@ void rv_func(mod_t *pm, fn_t *pf, FILE *fp)
     left = false;
     if (buflen(&pf->code) > 0) {
       ir_t *pl;
+      /* Labels and block/loop ends emit no code; the last real
+       * instruction decides whether the function already left for good.
+       * Trampoline jumps count as leaving: they tear the frame down and
+       * tail-transfer, exactly like return_call -- see rv_ins above. */
       pl = (ir_t *)bufref(&pf->code, buflen(&pf->code) - 1);
-      left = (pl->op == IR_RETURN || pl->op == IR_JUMP || pl->op == IR_RETCALL
-              || pl->op == IR_RETCALLI || pl->op == IR_UNREACHABLE
-              || pl->op == IR_BRTABLE);
+      while (pl->op == IR_LABEL || pl->op == IR_LOOPBEG || pl->op == IR_LOOPEND) {
+        if (pl == (ir_t *)bufref(&pf->code, 0)) { pl = NULL; break; }
+        pl -= 1;
+      }
+      left = (pl != NULL
+              && (pl->op == IR_RETURN || pl->op == IR_JUMP || pl->op == IR_RETCALL
+                  || pl->op == IR_RETCALLI || pl->op == IR_TJUMP
+                  || pl->op == IR_TJUMPI || pl->op == IR_UNREACHABLE
+                  || pl->op == IR_BRTABLE));
     }
     if (!left) {
       rv_teardown(fp);
