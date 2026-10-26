@@ -363,6 +363,26 @@ Every load and store instruction accepts an optional unsigned byte offset `offse
 | `(f64.store ... <ptr> <f64>)` | `[ptr f64] -> []` | 8 | Store 64-bit double |
 | `(ptr.store ... <ptr> <ptr>)` | `[ptr ptr] -> []` | 8 | Store pointer into 8-byte memory slot |
 
+#### Runs of Bytes
+
+A whole run of bytes is moved or set by one instruction rather than by a loop,
+so that every target can use the fastest means it has:
+
+| Instruction | Stack Type | Description |
+|---|---|---|
+| `(memory.copy <dst_ptr> <src_ptr> <count_i32>)` | `[ptr ptr i32] -> []` | Copy `count` bytes from `src` to `dst` |
+| `(memory.fill <dst_ptr> <byte_i32> <count_i32>)` | `[ptr i32 i32] -> []` | Set `count` bytes at `dst` to the low 8 bits of `byte` |
+
+- The operands come in the order WebAssembly gives them: where, what, how many.
+- `count` is read as an **unsigned** 32-bit number, so one run covers at most
+  4294967295 bytes. A `count` of zero touches nothing and is not an error.
+- The regions of a `memory.copy` **may overlap**. The result is as if the whole
+  source were read before anything was written, which is what `memmove`
+  guarantees and `memcpy` does not.
+- Only the low 8 bits of a `memory.fill` byte are used; the rest are ignored.
+- Whether a run reaches outside the memory the program owns is left undefined,
+  exactly as it is for a single load or store.
+
 ### 5.3 Pointer Operations
 
 | Instruction | Stack Type | Description |

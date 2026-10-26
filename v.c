@@ -137,6 +137,15 @@ void ir_write(const fn_t *pf, FILE *fp)
         args_write(pi, fp);
         fprintf(fp, " + %lld]", pi->off);
         break;
+      case IR_MEMORY: {
+        size_t k;
+        fprintf(fp, "%s", symname(pi->name));
+        for (k = 0; k < buflen(&pi->args); ++k) {
+          fputs(" ", fp);
+          op_write((opnd_t *)bufref(&pi->args, k), fp);
+        }
+        break;
+      }
       case IR_STORE: {
         size_t n;
         n = buflen(&pi->args);
@@ -750,6 +759,23 @@ void cc_func(const mod_t *pm, const fn_t *pf, FILE *fp)
         cc_args(pi, 0, mod, fp);
         fprintf(fp, ", %lld);\n", pi->off);
         break;
+      case IR_MEMORY: {
+        /* the C library's routines are the tuned ones on this target, and
+         * memmove rather than memcpy because a run may overlap.  The count is
+         * read unsigned, as WebAssembly reads it. */
+        bool isfill;
+        isfill = streql(symname(pi->name), "memory.fill");
+        fputs(isfill ? "  memset(" : "  memmove(", fp);
+        cc_opnd((opnd_t *)bufref(&pi->args, 0), mod, fp);
+        fputs(", ", fp);
+        if (isfill) fputs("(int)(", fp);
+        cc_opnd((opnd_t *)bufref(&pi->args, 1), mod, fp);
+        if (isfill) fputs(")", fp);
+        fputs(", (size_t)(marv_u32)(", fp);
+        cc_opnd((opnd_t *)bufref(&pi->args, 2), mod, fp);
+        fputs("));\n", fp);
+        break;
+      }
       case IR_STORE:
         fprintf(fp, "  MARV_STORE(%s, ", cc_memtype(symname(pi->name)));
         cc_opnd((opnd_t *)bufref(&pi->args, 0), mod, fp);
@@ -1579,6 +1605,14 @@ static void wo_form(snode_t *pn, int ind, FILE *fp)
       fputs("\n", fp);
     }
       return;
+    case IK_MEMORY: {
+      /* WebAssembly has these, so they go through as themselves: a pointer is
+       * an i32 here, which is what memory.copy and memory.fill take */
+      for (i = 1; i < snlen(pn); ++i) wo_form(snref(pn, i), ind, fp);
+      wo_ind(ind, fp);
+      fprintf(fp, "%s\n", h);
+      return;
+    }
     case IK_LOAD: case IK_STORE: {
       const char *op;
       bool isptr;
@@ -2102,6 +2136,7 @@ static int rv_max_gp_arity(fn_t *pf)
   for (i = 0; i < buflen(&pf->code); ++i) {
     ir_t *pi;
     pi = (ir_t *)bufref(&pf->code, i);
+    if (pi->op == IR_MEMORY) { if (mx < 3) mx = 3; continue; }
     if (pi->op != IR_CALL && pi->op != IR_CALLI
         && pi->op != IR_RETCALL && pi->op != IR_RETCALLI) continue;
     n = 0;
@@ -2282,6 +2317,10 @@ static void rv_alloc(fn_t *pf, ra_t *pr)
       *(int *)bufnewbk(&calls) = idx;
       pr->hascalls = true;
     } else if (pi->op == IR_RETCALL || pi->op == IR_RETCALLI) {
+      pr->hascalls = true;
+    } else if (pi->op == IR_MEMORY) {
+      /* it becomes a call, so ra is live across it like any other */
+      *(int *)bufnewbk(&calls) = idx;
       pr->hascalls = true;
     }
     rv_defs_uses(pi, &defs, &uses);
@@ -3130,6 +3169,14 @@ static void rv_ins(ir_t *pi, FILE *fp)
       fprintf(fp, "  %s %s, %lld(%s)\n", rv_ldop(op), d,
               rv_simm12(pi->off) ? pi->off : 0, l);
       rv_commit(pt, d, fp);
+      return;
+    }
+    case IR_MEMORY: {
+      /* RV64G has no bulk instruction, and the platform's memmove and memset
+       * are tuned for it: the three operands are already in call order */
+      rv_args(pi, 0, buflen(&pi->args), fp);
+      fprintf(fp, "  call %s\n",
+              streql(op, "memory.fill") ? "memset" : "memmove");
       return;
     }
     case IR_STORE: {

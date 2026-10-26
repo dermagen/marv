@@ -470,6 +470,8 @@ static const instr_t g_instrtab_[] = {
   { "unreachable",          IK_UNREACHABLE,        0, 0, { VT_VOID },               VT_VOID, 0 },
   { "drop",                 IK_DROP,               0, 1, { VT_ANY },                VT_VOID, 0 },
   { "select",               IK_SELECT,             0, 3, { VT_ANY, VT_ANY, VT_I32 }, VT_ANY,  0 },
+  { "memory.copy",          IK_MEMORY,             0, 3, { VT_PTR, VT_PTR, VT_I32 }, VT_VOID, 0 },
+  { "memory.fill",          IK_MEMORY,             0, 3, { VT_PTR, VT_I32, VT_I32 }, VT_VOID, 0 },
   { "br",                   IK_BR,                 1, 0, { VT_VOID },               VT_VOID, 0 },
   { "br_if",                IK_BR_IF,              1, 1, { VT_I32 },                VT_VOID, 0 },
   { "br_table",             IK_BR_TABLE,           2, 1, { VT_I32 },                VT_VOID, 0 },
@@ -2853,6 +2855,13 @@ static void u_form(unst_t *pu, snode_t *pn)
       pi->name = snref(pn, 1)->sym;
       pi->vt = mod_gtype(pu->mod, pi->name);
       ir_arg(pi, &a);
+      return;
+    case IK_MEMORY:
+      /* the run is given as it is in WebAssembly: where, what, how many */
+      u_pop(pu, &c); u_pop(pu, &b); u_pop(pu, &a);
+      pi = u_emit(pu, IR_MEMORY);
+      pi->name = head;
+      ir_arg(pi, &a); ir_arg(pi, &b); ir_arg(pi, &c);
       return;
     case IK_SELECT:
       u_pop(pu, &c); u_pop(pu, &b); u_pop(pu, &a);

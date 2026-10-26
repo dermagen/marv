@@ -883,13 +883,23 @@
                                ((or (string=? sym "free") (string=? sym "stdlib_free"))
                                 (run next-pc))
 
-                               ((or (string=? sym "memcpy") (string=? sym "string_memcpy") (string=? sym "string_memmove"))
+                               ;; the run is copied from the end when the
+                               ;; destination is above the source, so an
+                               ;; overlapping move does not smear
+                               ((or (string=? sym "memcpy") (string=? sym "memmove")
+                                    (string=? sym "string_memcpy") (string=? sym "string_memmove"))
                                 (let ((dst a0) (src a1) (n (u64 a2)))
-                                  (let clp ((i 0))
-                                    (when (< i n)
-                                      (bytevector-u8-set! mem (+ dst i)
-                                                          (bytevector-u8-ref mem (+ src i)))
-                                      (clp (+ i 1))))
+                                  (if (and (> dst src) (< dst (+ src n)))
+                                      (let clp ((i n))
+                                        (when (> i 0)
+                                          (bytevector-u8-set! mem (+ dst i -1)
+                                                              (bytevector-u8-ref mem (+ src i -1)))
+                                          (clp (- i 1))))
+                                      (let clp ((i 0))
+                                        (when (< i n)
+                                          (bytevector-u8-set! mem (+ dst i)
+                                                              (bytevector-u8-ref mem (+ src i)))
+                                          (clp (+ i 1)))))
                                   (set-gp! "a0" dst)
                                   (run next-pc)))
 

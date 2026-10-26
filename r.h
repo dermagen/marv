@@ -111,7 +111,7 @@ typedef enum ik {
   IK_SELECT, IK_BR, IK_BR_IF, IK_BR_TABLE,
   IK_RETURN, IK_CALL, IK_CALL_INDIRECT, IK_RETURN_CALL,
   IK_RETURN_CALL_INDIRECT, IK_BINARY, IK_UNARY, IK_COMPARE,
-  IK_CONVERT, IK_LOAD, IK_STORE,
+  IK_CONVERT, IK_LOAD, IK_STORE, IK_MEMORY,
   IK_COUNT
 } ik_t;
 
@@ -155,7 +155,8 @@ typedef enum iop {
   IR_LOOPBEG, IR_LOOPEND, IR_UNREACHABLE,
   IR_CALL, IR_CALLI, IR_RETCALL, IR_RETCALLI, IR_RETURN,
   IR_TJUMP,                /* a return_call that also resets the stack */
-  IR_TJUMPI                /* the same, to a callee given by value */
+  IR_TJUMPI,               /* the same, to a callee given by value */
+  IR_MEMORY                /* a run of bytes copied or filled at once */
 } iop_t;
 
 typedef struct ir {
