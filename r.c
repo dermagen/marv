@@ -1191,6 +1191,40 @@ void dseg_read(snode_t *pn, dseg_t *pd)
     if (*(char *)bufref(&pd->bytes, k) != 0) { pd->allzero = false; break; }
 }
 
+/* (global $n [(export "s")] (mut T)|T [(T.const v)]) -- the initializer is a
+ * constant expression, and anything else is refused rather than quietly
+ * started at zero */
+void glb_read(snode_t *pn, vt_t vt, glb_init_t *pg)
+{
+  size_t i;
+  pg->ismut = false;
+  pg->hasval = false;
+  pg->isflo = (vt == VT_F32 || vt == VT_F64);
+  pg->ival = 0;
+  pg->dval = 0.0;
+  for (i = 2; i < snlen(pn); ++i) {
+    snode_t *pc;
+    const char *h;
+    pc = snref(pn, i);
+    if (pc->nt != SN_LIST || snlen(pc) < 1 || snref(pc, 0)->nt != SN_SYM) continue;
+    h = symname(snref(pc, 0)->sym);
+    if (streql(h, "export") || streql(h, "mut")) {
+      if (streql(h, "mut")) pg->ismut = true;
+      continue;
+    }
+    if (streql(h, "ptr.null")) { pg->hasval = true; continue; }
+    if (snlen(pc) > 1 && strstr(h, ".const") != NULL) {
+      snode_t *pv;
+      pv = snref(pc, 1);
+      pg->hasval = true;
+      if (pg->isflo) pg->dval = (pv->nt == SN_FLT) ? pv->dval : (double)pv->ival;
+      else pg->ival = (pv->nt == SN_FLT) ? (long long)pv->dval : pv->ival;
+      continue;
+    }
+    sneprintf(pc, "a global takes a constant initializer, not (%s ...)", h);
+  }
+}
+
 void dseg_fini(dseg_t *pd)
 {
   buffini(&pd->bytes);
@@ -1433,14 +1467,20 @@ static void declare_func(mod_t *pm, snode_t *pn)
     if (pc->nt != SN_LIST || snlen(pc) < 1 || snref(pc, 0)->nt != SN_SYM) continue;
     h = symname(snref(pc, 0)->sym);
     if (streql(h, "param")) {
-      snode_t *pt;
-      pt = snref(pc, snlen(pc) - 1);           /* (param $x T) or (param T) */
-      if (pt->nt == SN_SYM && streql(symname(pt->sym), "...")) {
-        variadic = true;                       /* (param ...) */
-      } else if (pt->nt == SN_SYM) {
-        vt_t vt;
-        vt = vt_of_sym(pt->sym);
-        if (vt != VT_VOID) *(vt_t *)bufnewbk(&ps->ptypes) = vt;
+      size_t j;
+      /* a clause carries a name and a type, a type alone, or several types:
+       * (param $x T), (param T), (param T T ...) and (param ...) all occur,
+       * so every element that names a type is one parameter */
+      for (j = 1; j < snlen(pc); ++j) {
+        snode_t *pt;
+        pt = snref(pc, j);
+        if (pt->nt != SN_SYM) continue;
+        if (streql(symname(pt->sym), "...")) { variadic = true; continue; }
+        {
+          vt_t vt;
+          vt = vt_of_sym(pt->sym);
+          if (vt != VT_VOID) *(vt_t *)bufnewbk(&ps->ptypes) = vt;
+        }
       }
     } else if (streql(h, "result")) {
       snode_t *pt;

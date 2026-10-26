@@ -985,6 +985,9 @@ void cc_prologue_write(FILE *fp)
   deps_line(TT_CC, fp);
   fputs(cc_prologue, fp);
   fputs("\n", fp);
+  /* where the fixed runtime ends and this module begins: the driver cuts a
+   * large generated file into translation units here */
+  fputs("/* marv-runtime-end */\n\n", fp);
 }
 
 /* The areas a trampoline_jump writes when the compiler cannot make a jump of
@@ -1195,12 +1198,23 @@ void cc_static(const mod_t *pm, snode_t *pn, FILE *fp)
     }
     {
       sym_t gn;
+      glb_init_t gi;
+      glb_read(pn, vt, &gi);
       gn = mod_globalname((mod_t *)pm, snref(pn, 1)->sym);
       fprintf(fp, "%s%s ",
               (exported || cc_glb_iface_visible(pm, snref(pn, 1)->sym))
                 ? "" : "static ", cc_type(vt));
-      if (gn != 0) fprintf(fp, "%s;\n\n", symname(gn));
-      else fprintf(fp, "%s_%s;\n\n", mod, (const char *)cbdata(&nb));
+      if (gn != 0) fprintf(fp, "%s", symname(gn));
+      else fprintf(fp, "%s_%s", mod, (const char *)cbdata(&nb));
+      /* the declared initial value, which is not always zero */
+      if (gi.hasval) {
+        opnd_t o;
+        memset(&o, 0, sizeof(opnd_t));
+        o.kind = OK_IMM; o.vt = vt; o.ival = gi.ival; o.dval = gi.dval;
+        fputs(" = ", fp);
+        cc_opnd(&o, mod, fp);
+      }
+      fputs(";\n\n", fp);
     }
   }
   cbfini(&nb);
@@ -1953,10 +1967,18 @@ void wo_static(mod_t *pm, snode_t *pn, FILE *fp)
             && snref(pe, 1)->nt == SN_STR)
           gexp = (const char *)cbdata(&snref(pe, 1)->data);
       }
+      glb_init_t gi;
+      glb_read(pn, vt, &gi);
       fputs("  (global ", fp);
       wo_name(pm->name, snref(pn, 1)->sym, fp);
       if (gexp != NULL) fprintf(fp, " (export \"%s\")", gexp);
-      fprintf(fp, " (mut %s) (%s.const 0))\n", wo_type(vt), wo_type(vt));
+      /* the declaration's own mutability, and its own initial value */
+      if (gi.ismut) fprintf(fp, " (mut %s)", wo_type(vt));
+      else fprintf(fp, " %s", wo_type(vt));
+      fprintf(fp, " (%s.const ", wo_type(vt));
+      if (gi.isflo) wo_float(gi.dval, vt == VT_F32, fp);
+      else fprintf(fp, "%lld", gi.ival);
+      fputs("))\n", fp);
     }
   }
 }
@@ -3299,8 +3321,17 @@ void rv_static(mod_t *pm, snode_t *pn, FILE *fp)
     if (gexp != NULL) fprintf(fp, "  .globl %s\n", symname(gn));
     fputs("  .p2align 3\n", fp);
     fprintf(fp, "%s:\n", symname(gn));
-    if (vt == VT_I32 || vt == VT_F32) fputs("  .word 0\n", fp);
-    else fputs("  .dword 0\n", fp);
+    {   /* the declared initial value, as the bytes of its own width */
+      glb_init_t gi;
+      unsigned long long bits;
+      glb_read(pn, vt, &gi);
+      if (vt == VT_F32) bits = (unsigned long long)as_uint32((float)gi.dval);
+      else if (vt == VT_F64) bits = as_uint64(gi.dval);
+      else bits = (unsigned long long)gi.ival;
+      if (vt == VT_I32 || vt == VT_F32)
+        fprintf(fp, "  .word %lu\n", (unsigned long)(bits & 0xFFFFFFFFu));
+      else fprintf(fp, "  .dword %llu\n", bits);
+    }
     fputs("\n", fp);
     return;
   }

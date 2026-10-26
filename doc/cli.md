@@ -23,6 +23,7 @@ marv -t TARGDES [-c] [OPTION]... FILE...
 | `-I` | `--include-dir=DIR` | `DIR` | Add `DIR` to the project/local `.mvh` header lookup path (default: `("./")`). |
 | `-v` | `--verbose` | *(none)* | Print each compilation step line and the linker command line to `stderr` before executing. |
 | `-h` | `--help` | *(none)* | Display command-line usage and options. |
+| | `--split-funcs=N` | `N` | In link mode on a `cc` target, cut the generated C into pieces of at most `N` function definitions, each compiled as its own translation unit (default `300`; `0` does not cut). One huge translation unit is what makes a host C compiler's memory grow on a large module. Ignored in `-c` mode, which always writes one file. |
 
 Options follow standard POSIX syntax: short flags may be clustered (e.g. `-vc`), and option arguments may be passed either separately (`-t cc`, `-o app`) or attached (`-tcc`, `--target=cc`, `--output=app`).
 

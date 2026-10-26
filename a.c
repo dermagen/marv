@@ -503,6 +503,9 @@ static void mvusage(FILE *fp)
   fprintf(fp, "  -t, --target=TARGDES   target description to compile for (required)\n");
   fprintf(fp, "  -T, --target-dir=DIR   add DIR to the .mvt lookup path\n");
   fprintf(fp, "  -c, --compile          compile one .mvs file, do not link\n");
+  fprintf(fp, "      --split-funcs=N    in link mode on a cc target, cut the\n");
+  fprintf(fp, "                         generated C into pieces of at most N\n");
+  fprintf(fp, "                         functions (default 300; 0 does not cut)\n");
   fprintf(fp, "  -o, --output=FILE      output file; required unless -c is given\n");
   fprintf(fp, "  -L, --system-dir=DIR   add DIR to the system .mvh and .c lookup path\n");
   fprintf(fp, "  -I, --include-dir=DIR  add DIR to the local .mvh lookup path\n");
@@ -655,6 +658,239 @@ static void adapters_of_object(const char *path, buf_t *pcs)
   cbfini(&ln);
 }
 
+/* ------------------------------------------------------------ splitting
+ *
+ * One generated C file per module is what a host C compiler has to swallow,
+ * and for a module with thousands of functions that is where its memory goes.
+ * In link mode on a cc target the driver therefore cuts the generated file
+ * into pieces of at most g_split function definitions and hands every piece
+ * to the link command; -c mode never comes here and always writes one file.
+ *
+ * The cut relies only on the emitter's own output shape: a definition starts
+ * at an unindented line whose text runs to a `{` alone on the next line, and
+ * ends at a `}` in column one.  Everything before the first definition is the
+ * head, which every piece needs; in a piece after the first, a definition in
+ * that head becomes an `extern` declaration, so the pieces hold one definition
+ * of each symbol between them.  `main` and the pre-main constructors stay in
+ * the first piece.  [cco]
+ */
+
+static long g_split = 300;      /* 0 turns the splitting off */
+
+/* a line that opens a definition rather than declaring or directing */
+static bool split_opens(const char *l, const char *next)
+{
+  if (l[0] == ' ' || l[0] == '\t' || l[0] == '#' || l[0] == '}' || l[0] == 0)
+    return false;
+  if (strchr(l, '(') == NULL) return false;
+  if (strchr(l, ';') != NULL) return false;            /* a prototype */
+  return next != NULL && next[0] == '{';
+}
+
+/* does this line start a definition of storage rather than of code */
+static bool split_is_data(const char *l, cbuf_t *pex)
+{
+  const char *p;
+  const char *nm;
+  const char *br;
+  size_t n;
+  p = l;
+  if (strstr(p, "static ") == p) p += 7;
+  if (strstr(p, "MARV_ALIGNED(") == p) {
+    p = strchr(p, ')');
+    if (p == NULL) return false;
+    p += 1;
+    while (*p == ' ') p += 1;
+    if (strstr(p, "static ") == p) p += 7;
+  }
+  if (strstr(p, "unsigned char ") != p) {
+    /* a global: <marv type> <name> [= ...]; */
+    static const char *tys[7] = { "marv_i32 ", "marv_i64 ", "marv_f32 ",
+                                  "marv_f64 ", "marv_ptr ", "marv_u32 ",
+                                  "marv_u64 " };
+    size_t t;
+    for (t = 0; t < 7; ++t) {
+      if (strstr(p, tys[t]) == p) {
+        nm = p + strlen(tys[t]);
+        n = 0;
+        while (nm[n] != 0 && nm[n] != ' ' && nm[n] != ';'
+               && nm[n] != '=' && nm[n] != '(') n += 1;
+        /* a name followed by a parameter list is a function, not storage */
+        if (n == 0 || nm[n] == '(') return false;
+        cbputs("extern ", pex);
+        cbput(tys[t], strlen(tys[t]), pex);
+        cbput(nm, n, pex);
+        cbputs(";", pex);
+        return true;
+      }
+    }
+    return false;
+  }
+  nm = p + strlen("unsigned char ");
+  br = strchr(nm, '[');
+  if (br == NULL) return false;
+  cbputs("extern unsigned char ", pex);
+  cbput(nm, (size_t)(br - nm), pex);
+  cbputs("[];", pex);
+  return true;
+}
+
+/* a prototype or a definition of a function loses its `static`, so a piece can
+ * call what another piece defines */
+static void split_put_unstatic(const char *l, FILE *fp)
+{
+  if (strstr(l, "static ") == l) fputs(l + 7, fp);
+  else fputs(l, fp);
+  fputs("\n", fp);
+}
+
+/* read the whole generated file into a buffer of lines */
+static bool split_lines(const char *path, buf_t *plines, cbuf_t *ptext)
+{
+  FILE *fp;
+  int c;
+  size_t i, start;
+  const char *t;
+  fp = fopen(path, "rb");
+  if (fp == NULL) return false;
+  while ((c = fgetc(fp)) != EOF) {
+    if (c == '\r') continue;
+    cbputc((c == '\n') ? 0 : c, ptext);
+  }
+  fclose(fp);
+  cbputc(0, ptext);
+  t = (const char *)cbdata(ptext);
+  start = 0;
+  for (i = 0; i < cblen(ptext); ++i) {
+    if (t[i] == 0) {
+      *(const char **)bufnewbk(plines) = t + start;
+      start = i + 1;
+    }
+  }
+  return true;
+}
+
+/* Write the pieces of one generated C file, returning how many there are and
+ * interning their names into pnames.  Answers 1 and the file itself when there
+ * is nothing to gain. */
+static size_t split_file(const char *path, const char *objext, buf_t *pnames,
+                         buf_t *ptemps)
+{
+  buf_t lines;
+  cbuf_t text;
+  buf_t starts, ends;
+  size_t i, nl, nd, headend, piece, npieces, runtime;
+  bufinit(&lines, sizeof(const char *));
+  cbinit(&text);
+  if (!split_lines(path, &lines, &text)) {
+    buffini(&lines); cbfini(&text);
+    *(sym_t *)bufnewbk(pnames) = intern(path);
+    return 1;
+  }
+  nl = buflen(&lines);
+  bufinit(&starts, sizeof(size_t));
+  bufinit(&ends, sizeof(size_t));
+  /* the fixed runtime at the top has definitions of its own, which belong to
+   * every piece: the scan starts where the emitter says the module does */
+  runtime = 0;
+  for (i = 0; i < nl; ++i) {
+    const char *l;
+    l = *(const char **)bufref(&lines, i);
+    if (strstr(l, "/* marv-runtime-end */") == l) { runtime = i + 1; break; }
+  }
+  for (i = runtime; i < nl; ++i) {
+    const char *l;
+    const char *nx;
+    l = *(const char **)bufref(&lines, i);
+    nx = (i + 1 < nl) ? *(const char **)bufref(&lines, i + 1) : NULL;
+    if (!split_opens(l, nx)) continue;
+    {
+      size_t j;
+      *(size_t *)bufnewbk(&starts) = i;
+      for (j = i + 2; j < nl; ++j) {
+        const char *e;
+        e = *(const char **)bufref(&lines, j);
+        if (e[0] == '}' && (e[1] == 0 || e[1] == ';')) break;
+      }
+      *(size_t *)bufnewbk(&ends) = (j < nl) ? j : nl - 1;
+      i = (j < nl) ? j : nl - 1;
+    }
+  }
+  nd = buflen(&starts);
+  headend = (nd > 0) ? *(size_t *)bufref(&starts, 0) : nl;
+  if (headend < runtime) headend = runtime;
+  if (g_split <= 0 || nd <= (size_t)g_split) {
+    buffini(&lines); cbfini(&text); buffini(&starts); buffini(&ends);
+    *(sym_t *)bufnewbk(pnames) = intern(path);
+    return 1;
+  }
+  npieces = (nd + (size_t)g_split - 1) / (size_t)g_split;
+  for (piece = 0; piece < npieces; ++piece) {
+    sym_t nm;
+    FILE *fp;
+    size_t d, dlo, dhi;
+    nm = (piece == 0) ? intern(path) : temp_obj(objext);
+    fp = fopen(symname(nm), "wb");
+    if (fp == NULL) {
+      fprintf(stderr, "marv: cannot write %s\n", symname(nm));
+      exit(1);
+    }
+    /* the head: every piece needs it, and after the first the definitions in
+     * it are other pieces' */
+    for (i = 0; i < headend; ++i) {
+      const char *l;
+      l = *(const char **)bufref(&lines, i);
+      if (piece > 0 && i >= runtime) {
+        cbuf_t ex;
+        cbinit(&ex);
+        if (split_is_data(l, &ex)) {
+          cbputc(0, &ex);
+          fputs((const char *)cbdata(&ex), fp);
+          fputs("\n", fp);
+          cbfini(&ex);
+          /* skip to the end of the definition it replaced */
+          while (i < headend) {
+            const char *s;
+            s = *(const char **)bufref(&lines, i);
+            if (s[0] != 0 && s[strlen(s) - 1] == ';') break;
+            i += 1;
+          }
+          continue;
+        }
+        cbfini(&ex);
+      }
+      /* the runtime keeps its own linkage: every piece has a copy of it, and
+       * they are static so they do not collide */
+      if (i < runtime) { fputs(l, fp); fputs("\n", fp); }
+      else split_put_unstatic(l, fp);
+    }
+    dlo = piece * (size_t)g_split;
+    dhi = dlo + (size_t)g_split;
+    if (dhi > nd) dhi = nd;
+    for (d = 0; d < nd; ++d) {
+      size_t s0, s1;
+      const char *first;
+      bool pinned;
+      s0 = *(size_t *)bufref(&starts, d);
+      s1 = *(size_t *)bufref(&ends, d);
+      first = *(const char **)bufref(&lines, s0);
+      /* the entry point and anything that runs before main belong together
+       * with the storage they touch, which is in the first piece */
+      pinned = (strstr(first, "int main(") == first)
+               || (strstr(first, "MARV_CTOR(") == first);
+      if (pinned ? (piece != 0) : (d < dlo || d >= dhi)) continue;
+      for (i = s0; i <= s1; ++i)
+        split_put_unstatic(*(const char **)bufref(&lines, i), fp);
+      fputs("\n", fp);
+    }
+    fclose(fp);
+    *(sym_t *)bufnewbk(pnames) = nm;
+    if (piece > 0) *(sym_t *)bufnewbk(ptemps) = nm;
+  }
+  buffini(&lines); cbfini(&text); buffini(&starts); buffini(&ends);
+  return npieces;
+}
+
 static void run_linker(tgt_t *pt, const char *out, buf_t *pobjs, buf_t *pcs)
 {
   cbuf_t src;
@@ -734,31 +970,54 @@ int main(int argc, char **argv)
       char opt;
       opt = 0;
       val = NULL;
-      if (s[1] == '-') {                        /* --name=VALUE */
+      if (s[1] == '-') {                /* --name=VALUE or --name VALUE */
         const char *eq;
+        size_t n;
         eq = strchr(s, '=');
-        if (eq != NULL) {
-          size_t n;
-          n = (size_t)(eq - s);
-          if (n == 8 && strncmp(s, "--target", 8) == 0) opt = 't';
-          else if (n == 12 && strncmp(s, "--target-dir", 12) == 0) opt = 'T';
-          else if (n == 8 && strncmp(s, "--output", 8) == 0) opt = 'o';
-          else if (n == 12 && strncmp(s, "--system-dir", 12) == 0) opt = 'L';
-          else if (n == 13 && strncmp(s, "--include-dir", 13) == 0) opt = 'I';
-          val = eq + 1;
-        }
-      } else if (s[1] == 't' || s[1] == 'T' || s[1] == 'o'
-                 || s[1] == 'L' || s[1] == 'I') {
-        opt = s[1];
-        if (s[2] != '\0') val = s + 2;          /* -tcc */
-        else {                                  /* -t cc */
-          if (i + 1 >= argc) {
-            fprintf(stderr, "marv: -%c needs an argument\n", opt);
+        n = (eq != NULL) ? (size_t)(eq - s) : strlen(s);
+        if (n == 8 && strncmp(s, "--target", 8) == 0) opt = 't';
+        else if (n == 12 && strncmp(s, "--target-dir", 12) == 0) opt = 'T';
+        else if (n == 8 && strncmp(s, "--output", 8) == 0) opt = 'o';
+        else if (n == 12 && strncmp(s, "--system-dir", 12) == 0) opt = 'L';
+        else if (n == 13 && strncmp(s, "--include-dir", 13) == 0) opt = 'I';
+        else if (n == 13 && strncmp(s, "--split-funcs", 13) == 0) opt = 'S';
+        if (opt != 0) {
+          if (eq != NULL) val = eq + 1;
+          else if (i + 1 < argc) { i += 1; val = argv[i]; }
+          else {
+            fprintf(stderr, "marv: %s needs an argument\n", s);
             return 2;
           }
-          i += 1;
-          val = argv[i];
         }
+      } else {              /* short flags cluster, and the last may take a value */
+        size_t k;
+        bool bad;
+        bad = false;
+        for (k = 1; s[k] != '\0'; ++k) {
+          char c2;
+          c2 = s[k];
+          if (c2 == 'c') { conly = true; continue; }
+          if (c2 == 'v') { g_verbose = 1; continue; }
+          if (c2 == 'n') { g_dryrun = 1; continue; }
+          if (c2 == 't' || c2 == 'T' || c2 == 'o' || c2 == 'L' || c2 == 'I') {
+            opt = c2;
+            if (s[k + 1] != '\0') val = s + k + 1;      /* -tcc */
+            else if (i + 1 < argc) { i += 1; val = argv[i]; }   /* -t cc */
+            else {
+              fprintf(stderr, "marv: -%c needs an argument\n", c2);
+              return 2;
+            }
+            break;
+          }
+          bad = true;
+          break;
+        }
+        if (bad) {
+          fprintf(stderr, "marv: unknown option %s\n\n", s);
+          mvusage(stderr);
+          return 2;
+        }
+        if (opt == 0) continue;         /* the cluster was all flags */
       }
       if (opt == 0 || val == NULL) {
         fprintf(stderr, "marv: unknown option %s\n\n", s);
@@ -769,6 +1028,16 @@ int main(int argc, char **argv)
       else if (opt == 'o') outfile = val;
       else if (opt == 'T') dirs_add(&g_tdirs, val);
       else if (opt == 'L') dirs_add(&g_ldirs, val);
+      else if (opt == 'S') {
+        char *end;
+        long n2;
+        n2 = strtol(val, &end, 10);
+        if (end == val || *end != '\0' || n2 < 0) {
+          fprintf(stderr, "marv: --split-funcs takes a count, not %s\n", val);
+          return 2;
+        }
+        g_split = n2;
+      }
       else dirs_add(&g_idirs, val);
     }
   }
@@ -862,8 +1131,10 @@ int main(int argc, char **argv)
       sym_t dest;
       dest = temp_obj(symname(tgt.objext));
       compile_one(&tgt, argv[i], symname(dest));
-      *(sym_t *)bufnewbk(&objs) = dest;
       *(sym_t *)bufnewbk(&temps) = dest;
+      if (tgt.type == TT_CC && g_split > 0)
+        split_file(symname(dest), symname(tgt.objext), &objs, &temps);
+      else *(sym_t *)bufnewbk(&objs) = dest;
       gather_adapters(&cs);
     } else {
       *(sym_t *)bufnewbk(&objs) = intern(argv[i]);

@@ -266,6 +266,16 @@ typedef struct dseg {
 } dseg_t;
 
 extern void dseg_read(snode_t *pn, dseg_t *pd);
+/* a (global ...) clause's mutability and its initial value, which a target
+ * has to emit: dropping it would change what the program means */
+typedef struct glb_init {
+  bool ismut;
+  bool hasval;        /* an initializer was written */
+  bool isflo;
+  long long ival;
+  double dval;
+} glb_init_t;
+extern void glb_read(snode_t *pn, vt_t vt, glb_init_t *pg);
 extern void dseg_fini(dseg_t *pd);
 
 typedef struct glb {
