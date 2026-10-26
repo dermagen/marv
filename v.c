@@ -836,7 +836,8 @@ void cc_func(const mod_t *pm, const fn_t *pf, FILE *fp)
         }
         fputs("))(", fp);
         cc_opnd((opnd_t *)bufref(&pi->args, n - 1), mod, fp);
-        fputs(")(", fp);
+        /* the cast closes before the call, or the call is of the cast */
+        fputs("))(", fp);
         for (k = 0; k + 1 < n; ++k) {
           if (k > 0) fputs(", ", fp);
           cc_opnd((opnd_t *)bufref(&pi->args, k), mod, fp);
@@ -3733,6 +3734,9 @@ void cc_tramp_func(const mod_t *pm, fn_t *pf, FILE *fp)
   }
   pf->name = bodyname;
   pf->expname = 0;
+  /* the wrapper below calls this body and nothing else does, so a driver
+   * cutting the file into translation units has to keep the two together */
+  fputs("/* marv-keep-next */\n", fp);
   cc_func(pm, pf, fp);
   pf->name = realname;
   pf->expname = realexp;

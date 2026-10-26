@@ -735,12 +735,22 @@ static bool split_is_data(const char *l, cbuf_t *pex)
   return true;
 }
 
-/* a prototype or a definition of a function loses its `static`, so a piece can
- * call what another piece defines */
+/* Whatever one piece defines and another refers to loses its `static`, so the
+ * reference has a definition to bind to.  The word is not always the first on
+ * the line: a trampoline area wears its alignment in front of it, and a per
+ * piece copy of that would be wrong anyway, since the chain shares it. */
 static void split_put_unstatic(const char *l, FILE *fp)
 {
-  if (strstr(l, "static ") == l) fputs(l + 7, fp);
-  else fputs(l, fp);
+  const char *st;
+  if (strstr(l, "static ") == l) { fputs(l + 7, fp); fputs("\n", fp); return; }
+  st = strstr(l, " static ");
+  if (st != NULL && strstr(l, "MARV_ALIGNED(") == l) {
+    fwrite(l, 1, (size_t)(st - l), fp);
+    fputs(st + 7, fp);                 /* the space before it stays */
+    fputs("\n", fp);
+    return;
+  }
+  fputs(l, fp);
   fputs("\n", fp);
 }
 
@@ -778,8 +788,8 @@ static size_t split_file(const char *path, const char *objext, buf_t *pnames,
 {
   buf_t lines;
   cbuf_t text;
-  buf_t starts, ends;
-  size_t i, nl, nd, headend, piece, npieces, runtime;
+  buf_t starts, ends, whose;
+  size_t i, d, nl, nd, headend, piece, npieces, runtime, wrote;
   bufinit(&lines, sizeof(const char *));
   cbinit(&text);
   if (!split_lines(path, &lines, &text)) {
@@ -824,11 +834,48 @@ static size_t split_file(const char *path, const char *objext, buf_t *pnames,
     *(sym_t *)bufnewbk(pnames) = intern(path);
     return 1;
   }
-  npieces = (nd + (size_t)g_split - 1) / (size_t)g_split;
+  /* Which piece each definition goes to.  The entry point and whatever runs
+   * before it belong with the storage they touch, which is the first piece,
+   * and they take up room there like anything else.  A pair the emitter asked
+   * to keep together is not parted by a boundary. */
+  bufinit(&whose, sizeof(size_t));
+  for (d = 0; d < nd; ++d) *(size_t *)bufnewbk(&whose) = 0;
+  {
+    size_t at, used, npin;
+    npin = 0;
+    for (d = 0; d < nd; ++d) {
+      const char *fl;
+      fl = *(const char **)bufref(&lines, *(size_t *)bufref(&starts, d));
+      if (strstr(fl, "int main(") == fl || strstr(fl, "MARV_CTOR(") == fl)
+        npin += 1;
+    }
+    at = 0;
+    used = npin;
+    for (d = 0; d < nd; ++d) {
+      const char *fl;
+      size_t run, j;
+      fl = *(const char **)bufref(&lines, *(size_t *)bufref(&starts, d));
+      if (strstr(fl, "int main(") == fl || strstr(fl, "MARV_CTOR(") == fl)
+        continue;                        /* already counted, and piece 0 */
+      run = 1;
+      for (j = d; j + 1 < nd; ++j) {
+        size_t t0;
+        const char *b;
+        t0 = *(size_t *)bufref(&starts, j);
+        b = (t0 > 0) ? *(const char **)bufref(&lines, t0 - 1) : "";
+        if (strstr(b, "/* marv-keep-next */") != b) break;
+        run += 1;
+      }
+      if (used > 0 && used + run > (size_t)g_split) { at += 1; used = 0; }
+      for (j = 0; j < run; ++j) *(size_t *)bufref(&whose, d + j) = at;
+      used += run;
+      d += run - 1;
+    }
+    npieces = at + 1;
+  }
   for (piece = 0; piece < npieces; ++piece) {
     sym_t nm;
     FILE *fp;
-    size_t d, dlo, dhi;
     nm = (piece == 0) ? intern(path) : temp_obj(objext);
     fp = fopen(symname(nm), "wb");
     if (fp == NULL) {
@@ -864,30 +911,25 @@ static size_t split_file(const char *path, const char *objext, buf_t *pnames,
       if (i < runtime) { fputs(l, fp); fputs("\n", fp); }
       else split_put_unstatic(l, fp);
     }
-    dlo = piece * (size_t)g_split;
-    dhi = dlo + (size_t)g_split;
-    if (dhi > nd) dhi = nd;
+    wrote = 0;
     for (d = 0; d < nd; ++d) {
       size_t s0, s1;
-      const char *first;
-      bool pinned;
+      if (*(size_t *)bufref(&whose, d) != piece) continue;
       s0 = *(size_t *)bufref(&starts, d);
       s1 = *(size_t *)bufref(&ends, d);
-      first = *(const char **)bufref(&lines, s0);
-      /* the entry point and anything that runs before main belong together
-       * with the storage they touch, which is in the first piece */
-      pinned = (strstr(first, "int main(") == first)
-               || (strstr(first, "MARV_CTOR(") == first);
-      if (pinned ? (piece != 0) : (d < dlo || d >= dhi)) continue;
       for (i = s0; i <= s1; ++i)
         split_put_unstatic(*(const char **)bufref(&lines, i), fp);
       fputs("\n", fp);
+      wrote += 1;
     }
     fclose(fp);
+    /* a piece with no definition of its own is a compile for nothing */
+    if (piece > 0 && wrote == 0) { delfile(symname(nm)); continue; }
     *(sym_t *)bufnewbk(pnames) = nm;
     if (piece > 0) *(sym_t *)bufnewbk(ptemps) = nm;
   }
   buffini(&lines); cbfini(&text); buffini(&starts); buffini(&ends);
+  buffini(&whose);
   return npieces;
 }
 
